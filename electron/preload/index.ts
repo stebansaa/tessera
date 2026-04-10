@@ -1,15 +1,57 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import { IPC } from "../../src/shared/ipc";
 import type {
+  ConnectionStatusEvent,
+  CreateProjectRequest,
+  CreateSessionRequest,
+  IdRequest,
+  LoadTranscriptRequest,
+  LoadTranscriptResponse,
+  OpenFileRequest,
+  Project,
+  PtyKillRequest,
+  PtyResizeRequest,
   PtySpawnRequest,
   PtySpawnResponse,
   PtyWriteRequest,
-  PtyResizeRequest,
-  PtyKillRequest,
+  RenameRequest,
   RendererApi,
+  SearchRequest,
+  SearchResponse,
+  Session,
+  SessionDetails,
+  TabsState,
+  ThemeSettings,
+  UpdateSessionInput,
 } from "../../src/shared/ipc";
 
 const api: RendererApi = {
+  projects: {
+    list: (): Promise<Project[]> => ipcRenderer.invoke(IPC.projects.list),
+    create: (req: CreateProjectRequest): Promise<Project> =>
+      ipcRenderer.invoke(IPC.projects.create, req),
+    rename: (req: RenameRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.projects.rename, req),
+    delete: (req: IdRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.projects.delete, req),
+  },
+
+  sessions: {
+    list: (): Promise<Session[]> => ipcRenderer.invoke(IPC.sessions.list),
+    create: (req: CreateSessionRequest): Promise<Session> =>
+      ipcRenderer.invoke(IPC.sessions.create, req),
+    getDetails: (req: IdRequest): Promise<SessionDetails | null> =>
+      ipcRenderer.invoke(IPC.sessions.getDetails, req),
+    update: (req: UpdateSessionInput): Promise<void> =>
+      ipcRenderer.invoke(IPC.sessions.update, req),
+    delete: (req: IdRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.sessions.delete, req),
+    pin: (req: IdRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.sessions.pin, req),
+    unpin: (req: IdRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.sessions.unpin, req),
+  },
+
   pty: {
     spawn: (req: PtySpawnRequest): Promise<PtySpawnResponse> =>
       ipcRenderer.invoke(IPC.pty.spawn, req),
@@ -38,6 +80,60 @@ const api: RendererApi = {
       ) => handler(info);
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
+    },
+
+    onConnStatus: (handler: (evt: ConnectionStatusEvent) => void) => {
+      const listener = (_evt: IpcRendererEvent, data: ConnectionStatusEvent) =>
+        handler(data);
+      ipcRenderer.on(IPC.pty.connStatus, listener);
+      return () => ipcRenderer.removeListener(IPC.pty.connStatus, listener);
+    },
+
+    getConnStatusSnapshot: (): Promise<Record<string, number>> =>
+      ipcRenderer.invoke(IPC.pty.connStatusSnapshot),
+  },
+
+  transcripts: {
+    load: (req: LoadTranscriptRequest): Promise<LoadTranscriptResponse> =>
+      ipcRenderer.invoke(IPC.transcripts.load, req),
+  },
+
+  settings: {
+    getTheme: (): Promise<ThemeSettings> =>
+      ipcRenderer.invoke(IPC.settings.getTheme),
+    setTheme: (theme: ThemeSettings): Promise<void> =>
+      ipcRenderer.invoke(IPC.settings.setTheme, theme),
+    getTabs: (): Promise<TabsState> =>
+      ipcRenderer.invoke(IPC.settings.getTabs),
+    setTabs: (state: TabsState): Promise<void> =>
+      ipcRenderer.invoke(IPC.settings.setTabs, state),
+  },
+
+  search: {
+    fts: (req: SearchRequest): Promise<SearchResponse> =>
+      ipcRenderer.invoke(IPC.search.fts, req),
+  },
+
+  system: {
+    memoryUsage: (): Promise<number> =>
+      ipcRenderer.invoke(IPC.system.memoryUsage),
+    toggleFullscreen: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.system.toggleFullscreen),
+    isFullscreen: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.system.isFullscreen),
+  },
+
+  dialog: {
+    openFile: (req?: OpenFileRequest): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.dialog.openFile, req),
+  },
+
+  shortcuts: {
+    onAction: (handler: (action: string) => void) => {
+      const listener = (_evt: IpcRendererEvent, action: string) =>
+        handler(action);
+      ipcRenderer.on(IPC.shortcuts.action, listener);
+      return () => ipcRenderer.removeListener(IPC.shortcuts.action, listener);
     },
   },
 };

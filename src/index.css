@@ -2,18 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Defaults matching the "dark" color scheme.
+     ThemeProvider overrides all of these at runtime. */
+  --accent-rgb: 95 179 250;
+  --color-bg: #15161a;
+  --color-bg-header: #0f1014;
+  --color-bg-active: #272a31;
+  --color-bg-footer: #10131a;
+  --color-divider: #2d2f37;
+  --color-fg: #dee0e8;
+  --color-fg-dim: #9a9ea7;
+  --color-fg-muted: #6b6f78;
+  --color-fg-bright: #f9faff;
+  --color-fg-button: #73baf7;
+  --color-dot-on: #59db89;
+  --color-dot-off: #73767e;
+  --color-dot-llm: #bb80f2;
+  --color-dot-web: #73c4f5;
+}
+
 @layer base {
   html,
   body,
   #root {
     height: 100%;
     margin: 0;
-    background: #15161a;
-    color: #dee0e8;
+    background: var(--color-bg);
+    color: var(--color-fg);
     font-family: theme("fontFamily.sans");
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow: hidden;
+  }
+  /* UI font-size scales with the user's chosen terminal font size.
+     ThemeProvider sets --ui-scale = theme.fontSize / 13 on :root, and
+     because Tailwind's text-* and spacing classes are rem-based, every
+     piece of chrome scales with this single number. */
+  html {
+    font-size: calc(16px * var(--ui-scale, 1));
   }
 }
 
@@ -29,4 +56,34 @@
 .xterm-viewport::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.08);
   border-radius: 4px;
+}
+
+/*
+ * Themed scrollbar for app panels (settings forms, themes page, etc.).
+ * Applied via the .scroll-themed utility class so we don't override
+ * scrollbars on areas we explicitly style elsewhere (like xterm).
+ */
+.scroll-themed {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+.scroll-themed::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll-themed::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-themed::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 6px;
+}
+.scroll-themed::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+  background-clip: padding-box;
+}
+.scroll-themed::-webkit-scrollbar-corner {
+  background: transparent;
 }

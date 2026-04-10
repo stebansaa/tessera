@@ -1,16 +1,53 @@
+import { useEffect, useState } from "react";
+import { Maximize, Minimize } from "lucide-react";
+import { api } from "../lib/api";
+
 interface StatusBarProps {
   sessions: number;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 export function StatusBar({ sessions }: StatusBarProps) {
+  const [ram, setRam] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const poll = () => {
+      api.system.memoryUsage().then((bytes) => setRam(formatBytes(bytes)));
+      api.system.isFullscreen().then(setFullscreen);
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  const toggle = async () => {
+    const next = await api.system.toggleFullscreen();
+    setFullscreen(next);
+  };
+
   return (
     <div className="flex h-6 items-center gap-4 border-t border-divider bg-bg-header px-3 text-[11px] text-fg-muted">
       <span>
         <span className="text-dot-on">●</span> {sessions} sessions
       </span>
-      <span className="text-fg-muted/70">RAM 2.3 GB</span>
-      <span className="text-fg-muted/70">CPU 12%</span>
-      <span className="ml-auto text-fg-muted/70">workspace · dev</span>
+      {ram && <span className="text-fg-muted/70">RAM {ram}</span>}
+      <span className="ml-auto flex items-center gap-3">
+        <span className="text-fg-muted/70">tessera</span>
+        <button
+          onClick={toggle}
+          title={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          className="text-fg-muted transition hover:text-fg-bright"
+        >
+          {fullscreen ? <Minimize size={12} /> : <Maximize size={12} />}
+        </button>
+      </span>
     </div>
   );
 }
