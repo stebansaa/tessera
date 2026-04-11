@@ -13,7 +13,7 @@ import type {
 } from "../../src/shared/ipc";
 import { getDb, closeDb } from "../db/client";
 import { createRepo, type Repo } from "../db/repo";
-import { seedIfEmpty, seedServersyncOnce } from "../db/seed";
+import { seedIfEmpty } from "../db/seed";
 import { registerProjectHandlers } from "../ipc/projects";
 import { registerSessionHandlers } from "../ipc/sessions";
 import { registerSettingsHandlers } from "../ipc/settings";
@@ -429,7 +429,6 @@ app.whenReady().then(() => {
   const db = getDb();
   const repo = createRepo(db);
   seedIfEmpty(repo);
-  seedServersyncOnce(repo);
   registerProjectHandlers(repo);
   registerSessionHandlers(repo);
   registerSettingsHandlers(repo);
