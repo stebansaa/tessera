@@ -98,7 +98,7 @@ export interface SessionDetails extends Session {
 }
 
 export interface CreateSessionRequest {
-  projectId: string;
+  projectId?: string;
   name: string;
   kind: SessionKind;
   // Terminal extras (only used when kind is local|ssh)
@@ -116,7 +116,7 @@ export interface CreateSessionRequest {
 
 export interface UpdateSessionInput {
   id: string;
-  projectId: string;
+  projectId?: string;
   name: string;
   // Provide for terminal sessions only.
   terminal?: TerminalDetailsInput | null;
@@ -129,6 +129,12 @@ export interface RenameRequest {
 
 export interface IdRequest {
   id: string;
+}
+
+export interface ReorderSessionRequest {
+  id: string;
+  /** "up" moves toward lower position (higher in the list), "down" the opposite. */
+  direction: "up" | "down";
 }
 
 // ── App settings ───────────────────────────────────────────────────
@@ -162,10 +168,16 @@ export const DEFAULT_THEME: ThemeSettings = {
  * they left off. PTYs themselves don't survive a relaunch in Phase 1 —
  * each tab spawns a fresh shell on next mount.
  */
+export type TabType = "terminal" | "webview";
+
 export interface TabRecord {
   id: string;
   /** Stored as just the index/number; the UI prefixes the project name. */
   name: string;
+  /** Defaults to "terminal" for backwards compat with older persisted state. */
+  type?: TabType;
+  /** URL for webview tabs. */
+  url?: string;
 }
 
 export interface TabsState {
@@ -251,6 +263,22 @@ export interface LoadTranscriptResponse {
   hasMore: boolean;
 }
 
+// ── Storage stats ───────────────────────────────────────────────────
+
+export interface SessionStorageStat {
+  sessionId: string;
+  sessionName: string;
+  chunkCount: number;
+  sizeBytes: number;
+}
+
+export interface StorageStats {
+  dbSizeBytes: number;
+  totalChunks: number;
+  totalBytes: number;
+  sessions: SessionStorageStat[];
+}
+
 // ── Search ──────────────────────────────────────────────────────────
 
 export interface SearchRequest {
@@ -290,6 +318,7 @@ export const IPC = {
     delete: "sessions:delete",
     pin: "sessions:pin",
     unpin: "sessions:unpin",
+    reorder: "sessions:reorder",
   },
   pty: {
     spawn: "pty:spawn",
@@ -305,6 +334,8 @@ export const IPC = {
   },
   transcripts: {
     load: "transcripts:load",
+    clear: "transcripts:clear",
+    storageStats: "transcripts:storageStats",
   },
   search: {
     fts: "search:fts",
@@ -323,6 +354,8 @@ export const IPC = {
     setTheme: "settings:setTheme",
     getTabs: "settings:getTabs",
     setTabs: "settings:setTabs",
+    getLastSession: "settings:getLastSession",
+    setLastSession: "settings:setLastSession",
   },
   dialog: {
     openFile: "dialog:openFile",
@@ -356,6 +389,7 @@ export interface RendererApi {
     delete: (req: IdRequest) => Promise<void>;
     pin: (req: IdRequest) => Promise<void>;
     unpin: (req: IdRequest) => Promise<void>;
+    reorder: (req: ReorderSessionRequest) => Promise<void>;
   };
   pty: {
     spawn: (req: PtySpawnRequest) => Promise<PtySpawnResponse>;
@@ -374,12 +408,16 @@ export interface RendererApi {
   };
   transcripts: {
     load: (req: LoadTranscriptRequest) => Promise<LoadTranscriptResponse>;
+    clear: (req: IdRequest) => Promise<void>;
+    storageStats: () => Promise<StorageStats>;
   };
   settings: {
     getTheme: () => Promise<ThemeSettings>;
     setTheme: (theme: ThemeSettings) => Promise<void>;
     getTabs: () => Promise<TabsState>;
     setTabs: (state: TabsState) => Promise<void>;
+    getLastSession: () => Promise<string | null>;
+    setLastSession: (id: string) => Promise<void>;
   };
   search: {
     fts: (req: SearchRequest) => Promise<SearchResponse>;

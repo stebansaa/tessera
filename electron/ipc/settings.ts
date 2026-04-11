@@ -18,4 +18,15 @@ export function registerSettingsHandlers(repo: Repo) {
   ipcMain.handle(IPC.settings.setTabs, async (_evt, state: TabsState) => {
     repo.setTabsState(state);
   });
+
+  ipcMain.handle(IPC.settings.getLastSession, async () =>
+    repo.getSetting("lastSessionId"),
+  );
+
+  ipcMain.handle(
+    IPC.settings.setLastSession,
+    async (_evt, id: string) => {
+      repo.setSetting("lastSessionId", id);
+    },
+  );
 }

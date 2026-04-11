@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { Eraser } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { useTheme } from "../lib/theme";
 import { getScheme } from "../lib/color-schemes";
@@ -18,7 +19,10 @@ const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 const SPINNER_INTERVAL_MS = 80;
 
 /** How many transcript chunks to load on mount and per scroll-back page. */
-const TRANSCRIPT_PAGE_SIZE = 500;
+const TRANSCRIPT_PAGE_SIZE = 200;
+
+/** Max bytes to replay on mount. Keeps high-throughput sessions fast. */
+const REPLAY_BYTE_CAP = 256 * 1024;
 
 /**
  * Format an epoch-ms timestamp into a short "Apr 9 14:32" string.
@@ -72,13 +76,19 @@ interface Props {
   /** Session id this terminal is bound to. When set, main routes the
    *  spawn through SQLite to pick local-pty vs ssh based on session.kind. */
   sessionId?: string;
+  /** Unique tab id — used to distinguish multiple terminal tabs within
+   *  the same session. */
+  tabId?: string;
+  /** When true this is the primary terminal tab for the session and its
+   *  transcript history is replayed on mount. Secondary tabs start fresh. */
+  isFirstTab?: boolean;
   /** Optional label shown in the connecting overlay (e.g. "root@1.2.3.4").
    *  When omitted (local PTY) the overlay is skipped entirely since local
    *  shells spawn instantly and the flash would just be visual noise. */
   connectingLabel?: string;
 }
 
-export function TerminalView({ sessionId, connectingLabel }: Props) {
+export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLabel }: Props) {
   // Connecting overlay is only meaningful for SSH — local PTYs are
   // ready before paint. We track first-byte-received separately from
   // the label so the overlay reacts correctly when the label resolves
@@ -86,6 +96,10 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
   const [hasReceivedData, setHasReceivedData] = useState(false);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const showConnecting = !!connectingLabel && !hasReceivedData;
+
+  // Context menu state
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Exited state — shown after the PTY exits. Enables the reconnect
   // overlay and the Enter-to-reconnect shortcut.
@@ -224,11 +238,12 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
     const term = new Terminal({
       fontFamily: `"${initial.fontFamily}"${FONT_FALLBACK}`,
       fontSize: initial.fontSize,
-      scrollback: 10000,
+      scrollback: 50000,
       lineHeight: 1.25,
       cursorBlink: true,
       cursorStyle: "bar",
       allowTransparency: true,
+      rightClickSelectsWord: true,
       theme: initial.scheme.terminal,
     });
 
@@ -260,30 +275,47 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
 
     (async () => {
       // Replay the most recent transcript page from SQLite before spawning.
-      // Older pages are loaded on demand when the user scrolls to the top.
-      if (sessionId) {
+      // Only the first (primary) terminal tab replays history — secondary
+      // tabs start with a clean slate.
+      if (sessionId && isFirstTab) {
         try {
           const { chunks, hasMore } = await window.api.transcripts.load({
             sessionId,
             limit: TRANSCRIPT_PAGE_SIZE,
           });
           if (disposed) return;
-          hasMoreRef.current = hasMore;
-          if (chunks.length > 0) {
-            oldestSeqRef.current = chunks[0].seq;
-            if (hasMore) {
+          // Cap replay by byte size so high-throughput sessions (e.g.
+          // minutes of `ping`) don't freeze the terminal on mount.
+          // Walk backwards from the end to find which chunks fit.
+          let replayBytes = 0;
+          let startIdx = chunks.length;
+          for (let i = chunks.length - 1; i >= 0; i--) {
+            replayBytes += chunks[i].contentText.length;
+            if (replayBytes > REPLAY_BYTE_CAP) break;
+            startIdx = i;
+          }
+          const trimmedChunks = chunks.slice(startIdx);
+          const trimmedHasMore = hasMore || startIdx > 0;
+
+          hasMoreRef.current = trimmedHasMore;
+          if (trimmedChunks.length > 0) {
+            oldestSeqRef.current = trimmedChunks[0].seq;
+            if (trimmedHasMore) {
               term.writeln(
                 "\x1b[2m── scroll up to load older history ──\x1b[0m",
               );
             }
           }
-          for (const chunk of chunks) {
+          // Batch all chunks into a single string before writing to xterm.
+          let replay = "";
+          for (const chunk of trimmedChunks) {
             if (chunk.chunkType === "event") {
-              term.write(renderEventDivider(chunk.contentText, term.cols));
+              replay += renderEventDivider(chunk.contentText, term.cols);
             } else {
-              term.write(chunk.contentText);
+              replay += chunk.contentText;
             }
           }
+          if (replay) term.write(replay);
         } catch (err) {
           console.warn("[TerminalView] transcript load failed:", err);
         }
@@ -318,6 +350,33 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
       if (ptyIdRef.current && !exitedRef.current) {
         window.api.pty.write({ ptyId: ptyIdRef.current, data });
       }
+    });
+
+    // Right-click opens context menu with Copy / Paste / Select All.
+    const container = ref.current!;
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      setCtxMenu({ x: e.clientX, y: e.clientY });
+    };
+    container.addEventListener("contextmenu", onContextMenu);
+
+    // Ctrl+Shift+C / Ctrl+Shift+V for copy/paste.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      if (e.ctrlKey && e.shiftKey && e.code === "KeyC") {
+        const sel = term.getSelection();
+        if (sel) navigator.clipboard.writeText(sel);
+        return false;
+      }
+      if (e.ctrlKey && e.shiftKey && e.code === "KeyV") {
+        navigator.clipboard.readText().then((text) => {
+          if (text && ptyIdRef.current && !exitedRef.current) {
+            window.api.pty.write({ ptyId: ptyIdRef.current, data: text });
+          }
+        });
+        return false;
+      }
+      return true;
     });
 
     const onResize = () => {
@@ -365,17 +424,14 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
           // we save cursor, go to top, insert lines, write content,
           // and restore. This is imperfect for ANSI state but good
           // enough for scrollback history.
-          let content = "";
-          if (hasMore) {
-            content +=
-              "\x1b[2m── scroll up to load older history ──\x1b[0m\r\n";
-          }
+          let content = hasMore
+            ? "\x1b[2m── scroll up to load older history ──\x1b[0m\r\n"
+            : "";
           for (const chunk of chunks) {
-            if (chunk.chunkType === "event") {
-              content += renderEventDivider(chunk.contentText, term.cols);
-            } else {
-              content += chunk.contentText;
-            }
+            content +=
+              chunk.chunkType === "event"
+                ? renderEventDivider(chunk.contentText, term.cols)
+                : chunk.contentText;
           }
           // Count approximate lines added so we can adjust scroll.
           const lineCount = content.split("\n").length;
@@ -397,6 +453,7 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
 
     return () => {
       scrollDispose.dispose();
+      container.removeEventListener("contextmenu", onContextMenu);
       disposed = true;
       window.removeEventListener("resize", onResize);
       ro.disconnect();
@@ -412,9 +469,70 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Close context menu on any click or keypress outside it.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [ctxMenu]);
+
+  const ctxCopy = useCallback(() => {
+    const sel = termRef.current?.getSelection();
+    if (sel) navigator.clipboard.writeText(sel);
+    setCtxMenu(null);
+  }, []);
+
+  const ctxPaste = useCallback(() => {
+    navigator.clipboard.readText().then((text) => {
+      if (text && ptyIdRef.current && !exitedRef.current) {
+        window.api.pty.write({ ptyId: ptyIdRef.current, data: text });
+      }
+    });
+    setCtxMenu(null);
+  }, []);
+
+  const ctxSelectAll = useCallback(() => {
+    termRef.current?.selectAll();
+    setCtxMenu(null);
+  }, []);
+
+  const clearHistory = useCallback(async () => {
+    if (!sessionId) return;
+    const ok = window.confirm(
+      "Clear all saved history for this connection?\n\nThis removes the stored transcript permanently. The live terminal session is not affected.",
+    );
+    if (!ok) return;
+    try {
+      await window.api.transcripts.clear({ id: sessionId });
+    } catch (err) {
+      console.error("[TerminalView] clear transcript failed:", err);
+    }
+    const term = termRef.current;
+    if (term) {
+      term.clear();
+      term.write("\x1b[2m── history cleared ──\x1b[0m\r\n");
+    }
+    hasMoreRef.current = false;
+    oldestSeqRef.current = null;
+  }, [sessionId]);
+
   return (
-    <div className="relative h-full w-full">
+    <div className="group/term relative h-full w-full">
       <div ref={ref} className="h-full w-full" />
+      {sessionId && isFirstTab && !showConnecting && (
+        <button
+          onClick={clearHistory}
+          title="Clear history"
+          className="absolute right-2 top-2 z-10 rounded p-1.5 text-fg-muted opacity-0 transition hover:bg-white/[0.08] hover:text-fg group-hover/term:opacity-100"
+        >
+          <Eraser size={14} />
+        </button>
+      )}
       {showConnecting && connectingLabel && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-bg/85">
           <div className="flex items-center gap-3 rounded-md border border-divider bg-bg-header px-4 py-2.5 text-sm text-fg-bright shadow-lg">
@@ -440,6 +558,36 @@ export function TerminalView({ sessionId, connectingLabel }: Props) {
             </button>
             <span className="text-[11px] text-fg-muted">or press Enter</span>
           </div>
+        </div>
+      )}
+      {ctxMenu && (
+        <div
+          ref={ctxMenuRef}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="fixed z-50 min-w-[160px] rounded-md border border-divider bg-bg-header py-1 text-sm text-fg shadow-xl"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+        >
+          <button
+            onClick={ctxCopy}
+            className="flex w-full items-center justify-between px-3 py-1.5 hover:bg-white/[0.08]"
+          >
+            <span>Copy</span>
+            <span className="text-[11px] text-fg-muted">Ctrl+Shift+C</span>
+          </button>
+          <button
+            onClick={ctxPaste}
+            className="flex w-full items-center justify-between px-3 py-1.5 hover:bg-white/[0.08]"
+          >
+            <span>Paste</span>
+            <span className="text-[11px] text-fg-muted">Ctrl+Shift+V</span>
+          </button>
+          <div className="my-1 border-t border-divider" />
+          <button
+            onClick={ctxSelectAll}
+            className="flex w-full items-center justify-between px-3 py-1.5 hover:bg-white/[0.08]"
+          >
+            <span>Select All</span>
+          </button>
         </div>
       )}
     </div>

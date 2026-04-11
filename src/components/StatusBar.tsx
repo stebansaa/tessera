@@ -35,7 +35,7 @@ export function StatusBar({ sessions }: StatusBarProps) {
   return (
     <div className="flex h-6 items-center gap-4 border-t border-divider bg-bg-header px-3 text-[11px] text-fg-muted">
       <span>
-        <span className="text-dot-on">●</span> {sessions} sessions
+        <span className="text-dot-on">●</span> {sessions} connections
       </span>
       {ram && <span className="text-fg-muted/70">RAM {ram}</span>}
       <span className="ml-auto flex items-center gap-3">

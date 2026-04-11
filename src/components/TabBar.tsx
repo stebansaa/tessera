@@ -1,8 +1,10 @@
-import { Settings } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Globe, Settings, Terminal } from "lucide-react";
 
 interface Tab {
   id: string;
   name: string;
+  type?: "terminal" | "webview";
 }
 
 interface TabBarProps {
@@ -10,7 +12,7 @@ interface TabBarProps {
   activeId: string | null;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
-  onNew: () => void;
+  onNew: (type: "connection" | "webview") => void;
   /**
    * Called when the settings icon at the far right is clicked. Pass null
    * to hide the icon entirely — typically when there's nothing to settings
@@ -34,6 +36,19 @@ export function TabBar({
   onSettings,
   settingsActive = false,
 }: TabBarProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [menuOpen]);
   return (
     <div className="flex h-11 items-end border-b border-divider bg-bg-header pl-2 pr-2">
       {/*
@@ -62,6 +77,11 @@ export function TabBar({
                   : "border-transparent text-fg-dim hover:text-fg",
               ].join(" ")}
             >
+              {t.type === "webview" ? (
+                <Globe size={12} className="shrink-0 text-fg-muted" />
+              ) : (
+                <Terminal size={12} className="shrink-0 text-fg-muted" />
+              )}
               <span className="min-w-0 flex-1 truncate">{t.name}</span>
               {closable && (
                 <button
@@ -83,13 +103,39 @@ export function TabBar({
           );
         })}
       </div>
-      <button
-        onClick={onNew}
-        title="New tab"
-        className="ml-2 mb-1 flex h-9 w-9 shrink-0 items-center justify-center rounded text-2xl leading-none text-fg transition hover:bg-white/[0.06] hover:text-fg-bright"
-      >
-        +
-      </button>
+      <div className="relative ml-2 mb-1" ref={menuRef}>
+        <button
+          onClick={() => setMenuOpen((v) => !v)}
+          title="New tab"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-2xl leading-none text-fg transition hover:bg-white/[0.06] hover:text-fg-bright"
+        >
+          +
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full mt-1 z-50 min-w-[180px] rounded-lg border border-divider bg-bg-header py-1 shadow-xl">
+            <button
+              onClick={() => {
+                onNew("connection");
+                setMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-fg hover:bg-bg-active transition"
+            >
+              <Terminal size={14} className="text-fg-muted" />
+              Connection
+            </button>
+            <button
+              onClick={() => {
+                onNew("webview");
+                setMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-fg hover:bg-bg-active transition"
+            >
+              <Globe size={14} className="text-fg-muted" />
+              Web page
+            </button>
+          </div>
+        )}
+      </div>
 
       {onSettings && (
         <button

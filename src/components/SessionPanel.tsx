@@ -3,7 +3,7 @@ import { TerminalTabs } from "./TerminalTabs";
 import { SessionForm } from "./SessionForm";
 import { ThemePanel } from "./ThemePanel";
 import { api } from "../lib/api";
-import type { Project, Session } from "../shared/ipc";
+import type { Session, TabType } from "../shared/ipc";
 
 /**
  * The main content area can be in one of four modes:
@@ -37,26 +37,26 @@ interface Props {
   /** id of the currently selected session, or null. Drives which row in
    *  the terminal layer gets `visibility: visible`. */
   activeSessionId: string | null;
-  /** Per-session tab id list. Indexed by session id. */
-  tabIdsBySession: Record<string, string[]>;
+  /** Per-session tab metadata. Indexed by session id. */
+  tabDataBySession: Record<string, Array<{ id: string; type: TabType; url?: string }>>;
   /** Per-session active tab id. */
   activeTabBySession: Record<string, string>;
-  projects: Project[];
-  defaultProjectId: string | null;
   onSaved: (session: Session) => void;
   onCancel: () => void;
+  onDeleted: (sessionId: string) => void;
+  onTabUrlChange: (tabId: string, url: string) => void;
 }
 
 export function SessionPanel({
   mode,
   openTerminalSessions,
   activeSessionId,
-  tabIdsBySession,
+  tabDataBySession,
   activeTabBySession,
-  projects,
-  defaultProjectId,
   onSaved,
   onCancel,
+  onDeleted,
+  onTabUrlChange,
 }: Props) {
   // The terminal layer is in the back; the overlay (form / themes / empty
   // placeholder) sits on top when needed. We toggle visibility, never
@@ -70,8 +70,6 @@ export function SessionPanel({
     overlay = (
       <SessionForm
         mode={{ kind: "create" }}
-        projects={projects}
-        defaultProjectId={defaultProjectId}
         onSaved={onSaved}
         onCancel={onCancel}
       />
@@ -80,10 +78,9 @@ export function SessionPanel({
     overlay = (
       <SessionForm
         mode={{ kind: "edit", sessionId: mode.sessionId }}
-        projects={projects}
-        defaultProjectId={defaultProjectId}
         onSaved={onSaved}
         onCancel={onCancel}
+        onDeleted={onDeleted}
       />
     );
   } else if (mode.kind === "themes") {
@@ -94,11 +91,10 @@ export function SessionPanel({
       overlay = <Empty label="No session selected" />;
     } else if (s.kind === "llm") {
       overlay = <Empty label="LLM chat — Phase 4" />;
-    } else if (s.kind === "web") {
-      overlay = <Empty label="Webview — Phase 5" />;
     }
-    // Terminal-kind sessions render through the terminal layer below; no
-    // overlay needed.
+    // Terminal-kind sessions (local/ssh) render through the terminal layer
+    // below; no overlay needed. Webview tabs are handled per-tab inside
+    // TerminalTabs.
   }
 
   return (
@@ -118,8 +114,9 @@ export function SessionPanel({
             >
               <TerminalSessionView
                 session={s}
-                tabIds={tabIdsBySession[s.id] ?? []}
+                tabs={tabDataBySession[s.id] ?? []}
                 activeTabId={activeTabBySession[s.id] ?? null}
+                onTabUrlChange={onTabUrlChange}
               />
             </div>
           );
@@ -149,12 +146,14 @@ function Empty({ label }: { label: string }) {
  */
 function TerminalSessionView({
   session,
-  tabIds,
+  tabs,
   activeTabId,
+  onTabUrlChange,
 }: {
   session: Session;
-  tabIds: string[];
+  tabs: Array<{ id: string; type: TabType; url?: string }>;
   activeTabId: string | null;
+  onTabUrlChange: (tabId: string, url: string) => void;
 }) {
   const [connectingLabel, setConnectingLabel] = useState<string | undefined>(
     undefined,
@@ -183,9 +182,10 @@ function TerminalSessionView({
   return (
     <TerminalTabs
       sessionId={session.id}
-      tabIds={tabIds}
+      tabs={tabs}
       activeTabId={activeTabId}
       connectingLabel={connectingLabel}
+      onTabUrlChange={onTabUrlChange}
     />
   );
 }

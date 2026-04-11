@@ -5,6 +5,7 @@ import type {
   CreateProjectRequest,
   CreateSessionRequest,
   IdRequest,
+  ReorderSessionRequest,
   LoadTranscriptRequest,
   LoadTranscriptResponse,
   OpenFileRequest,
@@ -20,6 +21,7 @@ import type {
   SearchResponse,
   Session,
   SessionDetails,
+  StorageStats,
   TabsState,
   ThemeSettings,
   UpdateSessionInput,
@@ -50,6 +52,8 @@ const api: RendererApi = {
       ipcRenderer.invoke(IPC.sessions.pin, req),
     unpin: (req: IdRequest): Promise<void> =>
       ipcRenderer.invoke(IPC.sessions.unpin, req),
+    reorder: (req: ReorderSessionRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.sessions.reorder, req),
   },
 
   pty: {
@@ -96,6 +100,10 @@ const api: RendererApi = {
   transcripts: {
     load: (req: LoadTranscriptRequest): Promise<LoadTranscriptResponse> =>
       ipcRenderer.invoke(IPC.transcripts.load, req),
+    clear: (req: IdRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.transcripts.clear, req),
+    storageStats: (): Promise<StorageStats> =>
+      ipcRenderer.invoke(IPC.transcripts.storageStats),
   },
 
   settings: {
@@ -107,6 +115,10 @@ const api: RendererApi = {
       ipcRenderer.invoke(IPC.settings.getTabs),
     setTabs: (state: TabsState): Promise<void> =>
       ipcRenderer.invoke(IPC.settings.setTabs, state),
+    getLastSession: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.settings.getLastSession),
+    setLastSession: (id: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.settings.setLastSession, id),
   },
 
   search: {

@@ -1,7 +1,10 @@
 import { TerminalView } from "./TerminalView";
+import { WebviewTab } from "./WebviewTab";
+import type { TabType } from "../shared/ipc";
 
 /**
- * Renders one TerminalView per tab and only shows the active one.
+ * Renders one view per tab (TerminalView or WebviewTab) and only shows
+ * the active one.
  *
  * Inactive tabs use `visibility: hidden` (not `display: none`) so the
  * underlying div keeps its layout dimensions — that's what xterm's
@@ -9,44 +12,61 @@ import { TerminalView } from "./TerminalView";
  * the terminal would mount at 0×0 and only fix itself on the next
  * resize, which makes tab switches feel broken.
  *
- * Each TerminalView has a stable `key` so it stays mounted across
- * tab switches — its PTY keeps running in the background.
+ * Each view has a stable `key` so it stays mounted across tab switches
+ * — terminals keep their PTY running, webviews keep their page loaded.
  */
+interface TabData {
+  id: string;
+  type: TabType;
+  url?: string;
+}
+
 interface Props {
   /** Session id — passed down so each TerminalView can tell main which
    *  session it's spawning for (local PTY vs SSH is decided in main). */
   sessionId: string;
-  tabIds: string[];
+  tabs: TabData[];
   activeTabId: string | null;
   /** Optional "user@host" label, set only for SSH sessions, used by
    *  TerminalView to render the connecting overlay before first byte. */
   connectingLabel?: string;
+  onTabUrlChange: (tabId: string, url: string) => void;
 }
 
 export function TerminalTabs({
   sessionId,
-  tabIds,
+  tabs,
   activeTabId,
   connectingLabel,
+  onTabUrlChange,
 }: Props) {
   return (
     <div className="relative h-full w-full">
-      {tabIds.map((id) => {
-        const visible = id === activeTabId;
+      {tabs.map((tab) => {
+        const visible = tab.id === activeTabId;
         return (
           <div
-            key={id}
+            key={tab.id}
             className="absolute inset-0"
             style={{
               visibility: visible ? "visible" : "hidden",
-              // Stack the active tab on top so cursor/clicks land on it.
               zIndex: visible ? 1 : 0,
             }}
           >
-            <TerminalView
-              sessionId={sessionId}
-              connectingLabel={connectingLabel}
-            />
+            {tab.type === "webview" ? (
+              <WebviewTab
+                tabId={tab.id}
+                initialUrl={tab.url}
+                onUrlChange={(url) => onTabUrlChange(tab.id, url)}
+              />
+            ) : (
+              <TerminalView
+                sessionId={sessionId}
+                tabId={tab.id}
+                isFirstTab={tab.id === tabs.find((t) => t.type === "terminal")?.id}
+                connectingLabel={connectingLabel}
+              />
+            )}
           </div>
         );
       })}

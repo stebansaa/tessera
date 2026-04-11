@@ -141,11 +141,13 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
           rows: req.rows,
           identityFile: t.authMethod === "key" ? t.identityFile : null,
           password,
+          startDir: t.startDir,
         });
       } else {
+        const t = details?.terminal;
         conn = wrapLocalPty({
-          shell: req.shell,
-          cwd: req.cwd,
+          shell: t?.shellPath || req.shell,
+          cwd: t?.startDir || req.cwd,
           cols: req.cols,
           rows: req.rows,
           env: req.env,
@@ -297,6 +299,7 @@ function createWindow(repo: Repo) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false, // node-pty needs this off for the preload to load native modules
+      webviewTag: true, // needed for embedded web page tabs
     },
   });
 

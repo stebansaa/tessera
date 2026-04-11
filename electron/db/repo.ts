@@ -194,6 +194,12 @@ export function createRepo(db: Database.Database) {
     unpinSession: db.prepare(
       `UPDATE sessions SET pinned_at = NULL WHERE id = ?`,
     ),
+    selectSessionPosition: db.prepare(
+      `SELECT position, project_id FROM sessions WHERE id = ?`,
+    ),
+    updateSessionPosition: db.prepare(
+      `UPDATE sessions SET position = ? WHERE id = ?`,
+    ),
     // ── Runs + transcript chunks ──────────────────────────────────
     insertRun: db.prepare(`
       INSERT INTO session_runs (id, session_id, started_at, status)
@@ -254,6 +260,27 @@ export function createRepo(db: Database.Database) {
       ORDER BY f.rank
       LIMIT ?
     `),
+    // ── Storage stats + clear ──────────────────────────────────────
+    clearTranscript: db.prepare(
+      `DELETE FROM transcript_chunks WHERE session_id = ?`,
+    ),
+    clearRuns: db.prepare(
+      `DELETE FROM session_runs WHERE session_id = ? AND status != 'running'`,
+    ),
+    rebuildFts: db.prepare(
+      `INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild')`,
+    ),
+    storagePerSession: db.prepare(`
+      SELECT c.session_id, s.name AS session_name,
+             COUNT(*) AS chunk_count,
+             SUM(LENGTH(c.content_text)) AS size_bytes
+      FROM transcript_chunks c
+      JOIN sessions s ON s.id = c.session_id
+      GROUP BY c.session_id
+      ORDER BY size_bytes DESC
+    `),
+    dbPageCount: db.prepare(`PRAGMA page_count`),
+    dbPageSize: db.prepare(`PRAGMA page_size`),
     // ────────────────────────────────────────────────────────────────
     getSetting: db.prepare(`SELECT value FROM app_settings WHERE key = ?`),
     upsertSetting: db.prepare(`
@@ -283,18 +310,29 @@ export function createRepo(db: Database.Database) {
       return { id, name, position: pos };
     },
 
+    /** Returns the id of the first project, creating one if needed. */
+    defaultProjectId(): string {
+      const projects = stmts.listProjects.all() as { id: string }[];
+      if (projects.length > 0) return projects[0].id;
+      const id = randomUUID();
+      const now = Date.now();
+      stmts.insertProject.run(id, "Default", 0, now, now);
+      return id;
+    },
+
     createSession(input: CreateSessionInput): Session {
       const id = randomUUID();
       const now = Date.now();
       const type = kindToType(input.kind);
+      const projectId = input.projectId ?? this.defaultProjectId();
       const pos = (
-        stmts.nextSessionPosition.get(input.projectId) as { pos: number }
+        stmts.nextSessionPosition.get(projectId) as { pos: number }
       ).pos;
 
       const tx = db.transaction(() => {
         stmts.insertSession.run(
           id,
-          input.projectId,
+          projectId,
           input.name,
           type,
           pos,
@@ -331,7 +369,7 @@ export function createRepo(db: Database.Database) {
 
       return {
         id,
-        projectId: input.projectId,
+        projectId,
         name: input.name,
         kind: input.kind,
         position: pos,
@@ -378,7 +416,8 @@ export function createRepo(db: Database.Database) {
 
     updateSession(input: UpdateSessionInput): void {
       const tx = db.transaction(() => {
-        stmts.updateSessionRow.run(input.name, input.projectId, input.id);
+        const pid = input.projectId ?? this.defaultProjectId();
+        stmts.updateSessionRow.run(input.name, pid, input.id);
         // We only let the form edit terminal extras for now. LLM/webview
         // editing comes alongside Phases 4/5.
         const t: TerminalDetailsInput | null | undefined = input.terminal;
@@ -432,6 +471,32 @@ export function createRepo(db: Database.Database) {
 
     unpinSession(id: string): void {
       stmts.unpinSession.run(id);
+    },
+
+    /** Swap a session one position up or down within its project. */
+    reorderSession(id: string, direction: "up" | "down"): void {
+      const row = stmts.selectSessionPosition.get(id) as
+        | { position: number; project_id: string }
+        | undefined;
+      if (!row) return;
+
+      // Find the neighbor to swap with.
+      const allSessions = (stmts.listSessions.all() as SessionRow[])
+        .filter((s) => s.project_id === row.project_id)
+        .sort((a, b) => a.position - b.position);
+
+      const idx = allSessions.findIndex((s) => s.id === id);
+      if (idx < 0) return;
+
+      const neighborIdx = direction === "up" ? idx - 1 : idx + 1;
+      if (neighborIdx < 0 || neighborIdx >= allSessions.length) return;
+
+      const neighbor = allSessions[neighborIdx];
+      const tx = db.transaction(() => {
+        stmts.updateSessionPosition.run(neighbor.position, id);
+        stmts.updateSessionPosition.run(row.position, neighbor.id);
+      });
+      tx();
     },
 
     isEmpty(): boolean {
@@ -635,6 +700,52 @@ export function createRepo(db: Database.Database) {
         sessionName: r.session_name,
         snippet: r.snippet,
       }));
+    },
+
+    clearTranscript(sessionId: string): void {
+      const tx = db.transaction(() => {
+        stmts.clearTranscript.run(sessionId);
+        stmts.clearRuns.run(sessionId);
+        // The per-row FTS5 delete trigger can desync if content doesn't
+        // match exactly what was indexed. Rebuild the full-text index to
+        // guarantee consistency after a bulk delete.
+        stmts.rebuildFts.run();
+      });
+      tx();
+    },
+
+    getStorageStats(): import("../../src/shared/ipc").StorageStats {
+      interface PerSession {
+        session_id: string;
+        session_name: string;
+        chunk_count: number;
+        size_bytes: number;
+      }
+      const rows = stmts.storagePerSession.all() as PerSession[];
+      const pageCount = (stmts.dbPageCount.get() as { page_count: number })
+        .page_count;
+      const pageSize = (stmts.dbPageSize.get() as { page_size: number })
+        .page_size;
+
+      let totalChunks = 0;
+      let totalBytes = 0;
+      const sessions = rows.map((r) => {
+        totalChunks += r.chunk_count;
+        totalBytes += r.size_bytes;
+        return {
+          sessionId: r.session_id,
+          sessionName: r.session_name,
+          chunkCount: r.chunk_count,
+          sizeBytes: r.size_bytes,
+        };
+      });
+
+      return {
+        dbSizeBytes: pageCount * pageSize,
+        totalChunks,
+        totalBytes,
+        sessions,
+      };
     },
 
     /**

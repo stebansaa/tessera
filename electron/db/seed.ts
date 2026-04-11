@@ -8,10 +8,10 @@ import type { Repo } from "./repo";
 export function seedIfEmpty(repo: Repo) {
   if (!repo.isEmpty()) return;
 
-  const infra = repo.createProject("INFRA");
-  repo.createSession({ projectId: infra.id, name: "prod-server", kind: "ssh" });
-  repo.createSession({ projectId: infra.id, name: "staging-db", kind: "ssh" });
-  repo.createSession({ projectId: infra.id, name: "local dev", kind: "local" });
+  const proj = repo.createProject("Default");
+  repo.createSession({ projectId: proj.id, name: "prod-server", kind: "ssh" });
+  repo.createSession({ projectId: proj.id, name: "staging-db", kind: "ssh" });
+  repo.createSession({ projectId: proj.id, name: "local dev", kind: "local" });
 
   console.log("[db] seeded first-run demo data");
 }

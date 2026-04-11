@@ -5,11 +5,13 @@ import { StatusBar } from "./components/StatusBar";
 import { SessionPanel, type PanelMode } from "./components/SessionPanel";
 import { SearchOverlay } from "./components/SearchOverlay";
 import { api } from "./lib/api";
-import type { Project, Session } from "./shared/ipc";
+import type { Session, TabType } from "./shared/ipc";
 
 interface Tab {
   id: string;
   name: string;
+  type: TabType;
+  url?: string;
 }
 
 /**
@@ -31,48 +33,34 @@ type View =
   | { kind: "themes" };
 
 /**
- * How recent is "recent" for the RECENT sidebar section. Sessions touched
- * in this window show up at the top of the sidebar regardless of which
- * project they belong to. Set high enough that the section actually
- * stays useful between sessions, low enough that stale entries disappear.
+ * Build sidebar data: PINNED at top, then all unpinned sessions sorted
+ * by most recently used.
  */
-const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const RECENT_MAX = 5;
-
-/**
- * Build the layered sidebar view: PINNED at the top, RECENT below it,
- * then the regular projects. Sessions can appear in multiple sections
- * (a pinned session is also in its project) which intentionally matches
- * how Slack/Discord show starred channels.
- */
-function buildSidebar(projects: Project[], sessions: Session[]) {
-  const pinned = sessions
-    .filter((s) => s.pinnedAt !== null)
-    .sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
-
-  const now = Date.now();
-  const recent = sessions
-    .filter((s) => s.pinnedAt === null && now - s.lastUsedAt < RECENT_WINDOW_MS)
-    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-    .slice(0, RECENT_MAX);
-
-  const byProject = new Map<string, Session[]>();
-  for (const s of sessions) {
-    const list = byProject.get(s.projectId) ?? [];
-    list.push(s);
-    byProject.set(s.projectId, list);
+function safeHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
   }
-  const grouped = projects.map((p) => ({
-    id: p.id,
-    name: p.name,
-    sessions: byProject.get(p.id) ?? [],
-  }));
+}
 
-  return { pinned, recent, projects: grouped };
+/** Pinned first (by position), then unpinned (by position).
+ *  Only terminal connections (local/ssh) — webview and llm are tab types. */
+function buildSidebar(sessions: Session[]): Session[] {
+  const conns = sessions.filter((s) => s.kind === "local" || s.kind === "ssh");
+
+  const pinned = conns
+    .filter((s) => s.pinnedAt !== null)
+    .sort((a, b) => a.position - b.position);
+
+  const unpinned = conns
+    .filter((s) => s.pinnedAt === null)
+    .sort((a, b) => a.position - b.position);
+
+  return [...pinned, ...unpinned];
 }
 
 function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [view, setView] = useState<View>({ kind: "session", sessionId: null });
   // Remember the last session the user was actually looking at, so that
@@ -136,23 +124,33 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [p, s, t, cs] = await Promise.all([
-        api.projects.list(),
+      const [s, t, cs, savedId] = await Promise.all([
         api.sessions.list(),
         api.settings.getTabs(),
         api.pty.getConnStatusSnapshot(),
+        api.settings.getLastSession(),
       ]);
       if (cancelled) return;
-      setProjects(p);
       setSessions(s);
-      setTabsBySession(t.tabsBySession);
+      // Normalize persisted tabs — older saves may lack a `type` field.
+      const normalized: Record<string, Tab[]> = {};
+      for (const [sid, list] of Object.entries(t.tabsBySession)) {
+        normalized[sid] = list.map((tab) => ({
+          ...tab,
+          type: tab.type ?? "terminal",
+        }));
+      }
+      setTabsBySession(normalized);
       setActiveTabBySession(t.activeTabBySession);
       setConnStatus(cs);
       setTabsLoaded(true);
       if (s.length > 0) {
-        setView({ kind: "session", sessionId: s[0].id });
-        setLastSessionId(s[0].id);
-        setOpenSessionIds([s[0].id]);
+        // Restore the last active connection, falling back to the first one.
+        const targetId =
+          savedId && s.some((x) => x.id === savedId) ? savedId : s[0].id;
+        setView({ kind: "session", sessionId: targetId });
+        setLastSessionId(targetId);
+        setOpenSessionIds([targetId]);
       }
     })();
     return () => {
@@ -201,7 +199,7 @@ function App() {
         let num = 1;
         while (used.has(num)) num++;
         const id = `t-${activeSessionId}-${num}-${Date.now()}`;
-        const nextList = [...list, { id, name: String(num) }];
+        const nextList = [...list, { id, name: String(num), type: "terminal" as const }];
         persistTabs(
           { ...tabsBySession, [activeSessionId]: nextList },
           { ...activeTabBySession, [activeSessionId]: id },
@@ -250,12 +248,11 @@ function App() {
   });
 
   const sidebarData = useMemo(
-    () => buildSidebar(projects, sessions),
-    [projects, sessions],
+    () => buildSidebar(sessions),
+    [sessions],
   );
 
   // Pin/unpin via repo, then refetch to pick up the new pinnedAt value.
-  // The sidebar re-renders and the session jumps to (or out of) PINNED.
   const handleTogglePin = async (id: string) => {
     const s = sessions.find((x) => x.id === id);
     if (!s) return;
@@ -264,6 +261,12 @@ function App() {
     } else {
       await api.sessions.pin({ id });
     }
+    const next = await api.sessions.list();
+    setSessions(next);
+  };
+
+  const handleMoveSession = async (id: string, direction: "up" | "down") => {
+    await api.sessions.reorder({ id, direction });
     const next = await api.sessions.list();
     setSessions(next);
   };
@@ -293,7 +296,7 @@ function App() {
     if (tabsBySession[activeSessionId]?.length) return;
     const id = `t-${activeSessionId}-1-${Date.now()}`;
     persistTabs(
-      { ...tabsBySession, [activeSessionId]: [{ id, name: "1" }] },
+      { ...tabsBySession, [activeSessionId]: [{ id, name: "1", type: "terminal" }] },
       { ...activeTabBySession, [activeSessionId]: id },
     );
     // persistTabs is stable; eslint can't see that.
@@ -317,7 +320,12 @@ function App() {
     () =>
       currentTabs.map((t) => ({
         id: t.id,
-        name: activeSession ? `${activeSession.name} ${t.name}` : t.name,
+        name: t.type === "webview"
+          ? (t.url ? safeHostname(t.url) : `Web ${t.name}`)
+          : activeSession
+            ? `${activeSession.name} ${t.name}`
+            : t.name,
+        type: t.type,
       })),
     [currentTabs, activeSession],
   );
@@ -332,12 +340,15 @@ function App() {
           ? { kind: "themes" }
           : { kind: "session", session: activeSession };
 
-  // Map { sessionId -> Tab[] } down to { sessionId -> string[] } for the
-  // terminal layer, which only needs the ids to render mounted tabs.
-  const tabIdsBySession = useMemo(() => {
-    const out: Record<string, string[]> = {};
+  // Per-session tab metadata for the terminal/webview layer.
+  const tabDataBySession = useMemo(() => {
+    const out: Record<string, Array<{ id: string; type: TabType; url?: string }>> = {};
     for (const [sid, list] of Object.entries(tabsBySession)) {
-      out[sid] = list.map((t) => t.id);
+      out[sid] = list.map((t) => ({
+        id: t.id,
+        type: t.type ?? "terminal",
+        url: t.url,
+      }));
     }
     return out;
   }, [tabsBySession]);
@@ -355,18 +366,18 @@ function App() {
       .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
   }, [sessions, openSessionIds]);
 
-  const handleNewTab = () => {
+  const handleNewFromPlus = (type: "connection" | "webview") => {
     if (!activeSessionId) return;
     const list = tabsBySession[activeSessionId] ?? [];
-    // Find the smallest unused number so labels stay compact (1, 2, 3)
-    // even after closing tabs in the middle.
     const used = new Set(
       list.map((t) => parseInt(t.name, 10)).filter((n) => !isNaN(n)),
     );
     let num = 1;
     while (used.has(num)) num++;
+    const tabType = type === "webview" ? "webview" : "terminal";
     const id = `t-${activeSessionId}-${num}-${Date.now()}`;
-    const nextList = [...list, { id, name: String(num) }];
+    const newTab: Tab = { id, name: String(num), type: tabType };
+    const nextList = [...list, newTab];
     persistTabs(
       { ...tabsBySession, [activeSessionId]: nextList },
       { ...activeTabBySession, [activeSessionId]: id },
@@ -410,16 +421,45 @@ function App() {
   const handleSelectSession = (id: string) => {
     setView({ kind: "session", sessionId: id });
     setLastSessionId(id);
+    api.settings.setLastSession(id);
     markOpen(id);
-    // Optimistically bump lastUsedAt so the RECENT section reorders
-    // immediately. Main also bumps it server-side on PTY spawn — that
-    // refetch happens on the next list call and will overwrite this.
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, lastUsedAt: Date.now() } : s)),
-    );
   };
 
-  const handleNewSession = () => setView({ kind: "create" });
+  const handleNewConnection = () => setView({ kind: "create" });
+
+  const handleDeleteSession = async (sessionId: string) => {
+    // Refetch sessions to drop the deleted one.
+    const next = await api.sessions.list();
+    setSessions(next);
+    // Remove its tabs from persisted state.
+    const nextTabs = { ...tabsBySession };
+    const nextActive = { ...activeTabBySession };
+    delete nextTabs[sessionId];
+    delete nextActive[sessionId];
+    persistTabs(nextTabs, nextActive);
+    // Remove from open set so its TerminalView unmounts.
+    setOpenSessionIds((prev) => prev.filter((id) => id !== sessionId));
+    // Navigate to the next available session, or empty.
+    const fallback = next.length > 0 ? next[0].id : null;
+    setView({ kind: "session", sessionId: fallback });
+    setLastSessionId(fallback);
+    if (fallback) {
+      api.settings.setLastSession(fallback);
+      markOpen(fallback);
+    }
+  };
+
+  const handleTabUrlChange = (tabId: string, url: string) => {
+    if (!activeSessionId) return;
+    const list = tabsBySession[activeSessionId] ?? [];
+    const nextList = list.map((t) =>
+      t.id === tabId ? { ...t, url } : t,
+    );
+    persistTabs(
+      { ...tabsBySession, [activeSessionId]: nextList },
+      activeTabBySession,
+    );
+  };
 
   const handleSaved = (saved: Session) => {
     // Refetch the full list so positions/ordering stay correct after either
@@ -428,6 +468,7 @@ function App() {
       setSessions(s);
       setView({ kind: "session", sessionId: saved.id });
       setLastSessionId(saved.id);
+      api.settings.setLastSession(saved.id);
       markOpen(saved.id);
     });
   };
@@ -459,14 +500,13 @@ function App() {
     <div className="flex h-screen w-screen flex-col bg-bg text-fg">
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
-          pinned={sidebarData.pinned}
-          recent={sidebarData.recent}
-          projects={sidebarData.projects}
+          sessions={sidebarData}
           activeId={activeSessionId}
           connStatus={connStatus}
           onSelect={handleSelectSession}
           onTogglePin={handleTogglePin}
-          onNew={handleNewSession}
+          onMove={handleMoveSession}
+          onNew={handleNewConnection}
         />
         <main className="flex flex-1 flex-col overflow-hidden">
           <TabBar
@@ -477,7 +517,7 @@ function App() {
             activeId={settingsActive ? null : currentActiveTabId}
             onSelect={handleSelectTab}
             onClose={handleCloseTab}
-            onNew={handleNewTab}
+            onNew={handleNewFromPlus}
             onSettings={settingsHandler}
             settingsActive={settingsActive}
           />
@@ -487,12 +527,12 @@ function App() {
                 mode={panelMode}
                 openTerminalSessions={openTerminalSessions}
                 activeSessionId={activeSessionId}
-                tabIdsBySession={tabIdsBySession}
+                tabDataBySession={tabDataBySession}
                 activeTabBySession={activeTabBySession}
-                projects={projects}
-                defaultProjectId={activeSession?.projectId ?? null}
                 onSaved={handleSaved}
                 onCancel={handleCancel}
+                onDeleted={handleDeleteSession}
+                onTabUrlChange={handleTabUrlChange}
               />
             </div>
           </div>

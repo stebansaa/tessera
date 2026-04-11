@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type {
-  Project,
   Session,
   SessionKind,
   SshAuthMethod,
@@ -14,17 +13,14 @@ type Mode =
 
 interface Props {
   mode: Mode;
-  projects: Project[];
-  defaultProjectId: string | null;
   onSaved: (session: Session) => void;
   onCancel: () => void;
+  onDeleted?: (sessionId: string) => void;
 }
 
 const KINDS: { value: SessionKind; label: string }[] = [
   { value: "local", label: "Local terminal" },
   { value: "ssh", label: "SSH terminal" },
-  { value: "llm", label: "LLM chat" },
-  { value: "web", label: "Webview" },
 ];
 
 const AUTH_METHODS: { value: SshAuthMethod; label: string; hint: string }[] = [
@@ -54,16 +50,12 @@ const EMPTY_TERMINAL: TerminalDetails = {
  */
 export function SessionForm({
   mode,
-  projects,
-  defaultProjectId,
   onSaved,
   onCancel,
+  onDeleted,
 }: Props) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<SessionKind>("local");
-  const [projectId, setProjectId] = useState<string>(
-    defaultProjectId ?? projects[0]?.id ?? "",
-  );
   const [terminal, setTerminal] = useState<TerminalDetails>(EMPTY_TERMINAL);
   // Cleartext password lives in local component state only — never in
   // the persisted `terminal` object. Empty string + edit mode + hasPassword
@@ -71,6 +63,9 @@ export function SessionForm({
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(mode.kind === "edit");
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteInput, setDeleteInput] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   const nameRef = useRef<HTMLInputElement | null>(null);
 
@@ -83,7 +78,6 @@ export function SessionForm({
       if (cancelled || !details) return;
       setName(details.name);
       setKind(details.kind);
-      setProjectId(details.projectId);
       setTerminal(details.terminal ?? EMPTY_TERMINAL);
       setLoading(false);
       // focus the name field once values are populated
@@ -110,7 +104,7 @@ export function SessionForm({
 
   const isTerminal = kind === "local" || kind === "ssh";
   const isSsh = kind === "ssh";
-  const canSubmit = name.trim().length > 0 && projectId && !submitting;
+  const canSubmit = name.trim().length > 0 && !submitting;
 
   // Default new SSH sessions to password auth so the form has *something*
   // selected — switching to a different option is one click.
@@ -136,7 +130,6 @@ export function SessionForm({
     try {
       if (mode.kind === "create") {
         const session = await api.sessions.create({
-          projectId,
           name: name.trim(),
           kind,
           shellPath: terminal.shellPath || null,
@@ -158,7 +151,6 @@ export function SessionForm({
       } else {
         await api.sessions.update({
           id: mode.sessionId,
-          projectId,
           name: name.trim(),
           terminal: isTerminal
             ? {
@@ -179,10 +171,10 @@ export function SessionForm({
         // updateSession doesn't return the row; the parent will refetch.
         onSaved({
           id: mode.sessionId,
-          projectId,
+          projectId: "",  // backend manages this; parent refetches
           name: name.trim(),
           kind,
-          position: 0, // ignored by parent on refetch
+          position: 0,
         });
       }
     } finally {
@@ -208,7 +200,7 @@ export function SessionForm({
     <div className="scroll-themed h-full w-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[560px] flex-col px-8 py-8">
       <h1 className="mb-1 text-xl font-medium text-fg-bright">
-        {mode.kind === "create" ? "New session" : "Session settings"}
+        {mode.kind === "create" ? "New connection" : "Connection settings"}
       </h1>
       <p className="mb-6 text-sm text-fg-muted">
         {mode.kind === "create"
@@ -238,20 +230,6 @@ export function SessionForm({
             {KINDS.map((k) => (
               <option key={k.value} value={k.value}>
                 {k.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Project">
-          <select
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className="w-full rounded border border-divider bg-bg-header px-3 py-2 text-sm text-fg outline-none focus:border-accent"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
               </option>
             ))}
           </select>
@@ -406,9 +384,68 @@ export function SessionForm({
           disabled={!canSubmit}
           className="rounded bg-accent px-4 py-2 text-sm font-medium text-bg transition disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {mode.kind === "create" ? "Create session" : "Save changes"}
+          {mode.kind === "create" ? "Create connection" : "Save changes"}
         </button>
       </div>
+
+      {mode.kind === "edit" && onDeleted && (
+        <div className="mt-12 rounded-lg border border-red-500/30 bg-red-500/[0.04] p-4">
+          <SectionDivider label="Danger zone" />
+          <p className="mt-3 text-sm text-fg-muted">
+            Permanently delete this connection, including all terminal history
+            and saved settings. This action cannot be undone.
+          </p>
+          {!showDeleteConfirm ? (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="mt-3 rounded border border-red-500/40 px-3 py-1.5 text-sm text-red-400 transition hover:bg-red-500/10"
+            >
+              Delete this connection…
+            </button>
+          ) : (
+            <div className="mt-3 space-y-3">
+              <p className="text-sm text-fg">
+                Type <span className="font-semibold text-fg-bright">{name}</span> to
+                confirm:
+              </p>
+              <input
+                value={deleteInput}
+                onChange={(e) => setDeleteInput(e.target.value)}
+                placeholder={name}
+                autoFocus
+                className="w-full rounded border border-red-500/40 bg-bg px-3 py-2 text-sm text-fg outline-none focus:border-red-500"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    setDeleteInput("");
+                  }}
+                  className="rounded px-3 py-1.5 text-sm text-fg-dim transition hover:text-fg"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={deleteInput !== name || deleting}
+                  onClick={async () => {
+                    if (deleteInput !== name) return;
+                    setDeleting(true);
+                    try {
+                      await api.sessions.delete({ id: mode.sessionId });
+                      onDeleted(mode.sessionId);
+                    } finally {
+                      setDeleting(false);
+                    }
+                  }}
+                  className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {deleting ? "Deleting…" : "Delete permanently"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       </div>
     </div>
   );

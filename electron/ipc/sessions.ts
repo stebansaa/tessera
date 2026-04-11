@@ -3,6 +3,7 @@ import { IPC } from "../../src/shared/ipc";
 import type {
   CreateSessionRequest,
   IdRequest,
+  ReorderSessionRequest,
   UpdateSessionInput,
 } from "../../src/shared/ipc";
 import type { Repo } from "../db/repo";
@@ -34,4 +35,11 @@ export function registerSessionHandlers(repo: Repo) {
   ipcMain.handle(IPC.sessions.unpin, async (_evt, req: IdRequest) => {
     repo.unpinSession(req.id);
   });
+
+  ipcMain.handle(
+    IPC.sessions.reorder,
+    async (_evt, req: ReorderSessionRequest) => {
+      repo.reorderSession(req.id, req.direction);
+    },
+  );
 }

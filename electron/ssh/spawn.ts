@@ -32,6 +32,8 @@ export interface SshSpawnOptions {
   identityFile?: string | null;
   /** Cleartext password (already decrypted from safeStorage). */
   password?: string | null;
+  /** Remote directory to cd into after the shell opens. */
+  startDir?: string | null;
 }
 
 export interface Connection {
@@ -122,6 +124,13 @@ export function spawnSsh(opts: SshSpawnOptions): Promise<Connection> {
               h({ exitCode: code ?? 0, signal: signal ? 0 : undefined });
             }
           });
+
+          // If a startDir is configured, cd into it immediately.
+          // We send a clear-line + cd + clear-screen so the user sees
+          // a clean prompt in the target directory.
+          if (opts.startDir) {
+            ch.write(`cd ${JSON.stringify(opts.startDir)} && clear\n`);
+          }
 
           resolveP({
             write(data: string) {
