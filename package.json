@@ -2,7 +2,7 @@
   "name": "tessera",
   "version": "0.1.0",
   "description": "Unified developer workspace terminal",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "author": "Esteban",
   "main": "out/main/index.js",

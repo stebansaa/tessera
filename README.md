@@ -196,7 +196,7 @@ The schema uses SQLite with WAL mode and foreign keys enabled:
 
 ## License
 
-UNLICENSED (proprietary)
+MIT - see [LICENSE](LICENSE)
 
 ## Author
 
