@@ -95,7 +95,7 @@ All communication between main and renderer goes through typed IPC channels defi
 
 ## Requirements
 
-- **Node.js** 20 or later
+- **Node.js** 22 LTS recommended
 - **npm** 9 or later
 - **Platform:** Linux, macOS, or Windows
 - A C++ toolchain for native module compilation (`node-pty`, `better-sqlite3`):
@@ -103,15 +103,23 @@ All communication between main and renderer goes through typed IPC channels defi
   - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
   - **Windows:** Visual Studio Build Tools with C++ workload
 
+Notes:
+
+- The project currently works best with **Node 22 LTS**. Newer major Node releases may fail to build native dependencies.
+- Linux and macOS are the primary tested development targets today.
+- Windows support is intended, but should still be treated as lightly tested until the local shell and SSH flows are validated on a Windows machine.
+
 ## Installation
 
 ```bash
 git clone https://github.com/stebansaa/tessera.git
-cd tessera/workspace-app
+cd tessera
 npm install
 ```
 
 The `postinstall` script automatically runs `electron-rebuild` to compile `better-sqlite3` and `node-pty` against Electron's Node version.
+
+If you have multiple Node versions installed, make sure `node` and `npm` resolve to Node 22 before running `npm install` or `npm run dev`.
 
 ## Development
 
@@ -131,7 +139,7 @@ npm run start      # Preview the production build
 ## Project Structure
 
 ```
-workspace-app/
+tessera/
 ├── electron/
 │   ├── main/index.ts           # Electron entry, PTY handlers, window setup
 │   ├── preload/index.ts        # contextBridge API exposure

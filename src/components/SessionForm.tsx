@@ -243,7 +243,7 @@ export function SessionForm({
               <input
                 value={terminal.startDir ?? ""}
                 onChange={(e) => updateTerminal({ startDir: e.target.value })}
-                placeholder="~ (defaults to home)"
+                placeholder="Home-relative or absolute path"
                 className="w-full rounded border border-divider bg-bg-header px-3 py-2 text-sm text-fg outline-none focus:border-accent"
               />
             </Field>
@@ -252,7 +252,7 @@ export function SessionForm({
               <input
                 value={terminal.shellPath ?? ""}
                 onChange={(e) => updateTerminal({ shellPath: e.target.value })}
-                placeholder="/bin/bash (defaults to $SHELL)"
+                placeholder="Leave blank to use the default shell"
                 className="w-full rounded border border-divider bg-bg-header px-3 py-2 text-sm text-fg outline-none focus:border-accent"
               />
             </Field>
@@ -350,7 +350,7 @@ export function SessionForm({
                     onChange={(e) =>
                       updateTerminal({ identityFile: e.target.value })
                     }
-                    placeholder="~/.ssh/id_ed25519"
+                    placeholder="Private key path"
                     className="min-w-0 flex-1 rounded border border-divider bg-bg-header px-3 py-2 text-sm text-fg outline-none focus:border-accent"
                   />
                   <button

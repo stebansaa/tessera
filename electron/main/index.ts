@@ -42,6 +42,7 @@ function expandHomePath(p?: string): string | undefined {
   if (!p) return p;
   if (p === "~") return homedir();
   if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p.startsWith("~\\")) return join(homedir(), p.slice(2));
   return p;
 }
 

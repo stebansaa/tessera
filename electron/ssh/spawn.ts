@@ -48,6 +48,7 @@ export interface Connection {
 function expandHome(p: string): string {
   if (p === "~") return homedir();
   if (p.startsWith("~/")) return resolve(homedir(), p.slice(2));
+  if (p.startsWith("~\\")) return resolve(homedir(), p.slice(2));
   return p;
 }
 
