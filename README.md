@@ -136,6 +136,29 @@ npm run build      # Build main + preload + renderer
 npm run start      # Preview the production build
 ```
 
+## Releases
+
+Package artifacts are built with `electron-builder`.
+
+```bash
+npm run dist
+```
+
+GitHub Releases are built automatically by the workflow in `.github/workflows/release.yml` when you push a version tag:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+The release workflow builds platform-native artifacts on:
+
+- macOS
+- Windows
+- Linux
+
+It then uploads those artifacts to the matching GitHub Release.
+
 ## Project Structure
 
 ```

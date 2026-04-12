@@ -5,13 +5,20 @@
   "license": "MIT",
   "private": true,
   "author": "Esteban",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stebansaa/tessera.git"
+  },
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3,node-pty",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
-    "postinstall": "electron-rebuild -f -w better-sqlite3,node-pty"
+    "postinstall": "npm run rebuild:native"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -26,6 +33,12 @@
     "ssh2": "^1.17.0",
     "zustand": "^5.0.2"
   },
+  "optionalDependencies": {
+    "@rollup/rollup-darwin-arm64": "4.60.1",
+    "@rollup/rollup-darwin-x64": "4.60.1",
+    "@rollup/rollup-linux-x64-gnu": "4.60.1",
+    "@rollup/rollup-win32-x64-msvc": "4.60.1"
+  },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
     "@types/better-sqlite3": "^7.6.12",
@@ -36,10 +49,58 @@
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.20",
     "electron": "^33.3.0",
+    "electron-builder": "^26.8.1",
     "electron-vite": "^2.3.0",
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",
     "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.stebansaa.tessera",
+    "productName": "Tessera",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Development",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "stebansaa",
+      "repo": "tessera"
+    }
   }
 }
