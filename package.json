@@ -1,6 +1,6 @@
 {
   "name": "tessera",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unified developer workspace terminal",
   "license": "MIT",
   "private": true,
@@ -13,9 +13,11 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prepare:release:native": "node scripts/remove-optional-native.js",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3,node-pty",
-    "dist": "npm run build && electron-builder",
-    "dist:dir": "npm run build && electron-builder --dir",
+    "rebuild:native:release": "npm run prepare:release:native && npm run rebuild:native",
+    "dist": "npm run build && npm run rebuild:native:release && electron-builder",
+    "dist:dir": "npm run build && npm run rebuild:native:release && electron-builder --dir",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "postinstall": "npm run rebuild:native"
