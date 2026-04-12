@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { homedir } from "os";
 import { spawn as ptySpawn } from "node-pty";
 import { IPC } from "../../src/shared/ipc";
 import type {
@@ -37,6 +38,13 @@ const ptyToSession = new Map<string, string>();
 /** Per-ptyId transcript writers — buffer PTY output → SQLite chunks. */
 const writers = new Map<string, TranscriptWriter>();
 
+function expandHomePath(p?: string): string | undefined {
+  if (!p) return p;
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+
 /** Wrap a node-pty IPty in our Connection shape. */
 function wrapLocalPty(opts: {
   shell?: string;
@@ -49,7 +57,7 @@ function wrapLocalPty(opts: {
     opts.shell ||
     process.env.SHELL ||
     (process.platform === "win32" ? "powershell.exe" : "/bin/bash");
-  const cwd = opts.cwd || app.getPath("home");
+  const cwd = expandHomePath(opts.cwd) || app.getPath("home");
 
   const pty = ptySpawn(shellPath, [], {
     name: "xterm-256color",
@@ -480,7 +488,9 @@ app.on("window-all-closed", () => {
   }
   connections.clear();
 
-  closeDb();
-
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  closeDb();
 });

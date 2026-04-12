@@ -51,6 +51,18 @@ function expandHome(p: string): string {
   return p;
 }
 
+function shellEscape(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildStartDirCommand(startDir: string): string {
+  if (startDir === "~") return 'cd -- "$HOME" && clear\n';
+  if (startDir.startsWith("~/")) {
+    return `cd -- "$HOME"/${shellEscape(startDir.slice(2))} && clear\n`;
+  }
+  return `cd -- ${shellEscape(startDir)} && clear\n`;
+}
+
 export function spawnSsh(opts: SshSpawnOptions): Promise<Connection> {
   return new Promise((resolveP, rejectP) => {
     const client = new Client();
@@ -129,7 +141,7 @@ export function spawnSsh(opts: SshSpawnOptions): Promise<Connection> {
           // We send a clear-line + cd + clear-screen so the user sees
           // a clean prompt in the target directory.
           if (opts.startDir) {
-            ch.write(`cd ${JSON.stringify(opts.startDir)} && clear\n`);
+            ch.write(buildStartDirCommand(opts.startDir));
           }
 
           resolveP({
