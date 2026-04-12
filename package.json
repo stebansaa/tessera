@@ -1,10 +1,13 @@
 {
   "name": "tessera",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Unified developer workspace terminal",
   "license": "MIT",
   "private": true,
-  "author": "Esteban",
+  "author": {
+    "name": "Esteban",
+    "email": "steban@gmail.com"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/stebansaa/tessera.git"
@@ -36,6 +39,9 @@
     "zustand": "^5.0.2"
   },
   "optionalDependencies": {
+    "@esbuild/darwin-arm64": "0.21.5",
+    "@esbuild/linux-x64": "0.21.5",
+    "@esbuild/win32-x64": "0.21.5",
     "@rollup/rollup-darwin-arm64": "4.60.1",
     "@rollup/rollup-darwin-x64": "4.60.1",
     "@rollup/rollup-linux-x64-gnu": "4.60.1",
@@ -93,6 +99,7 @@
       "allowToChangeInstallationDirectory": true
     },
     "linux": {
+      "maintainer": "Esteban <steban@gmail.com>",
       "category": "Development",
       "target": [
         "AppImage",
