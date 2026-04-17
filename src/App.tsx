@@ -3,7 +3,6 @@ import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
 import { SessionPanel, type PanelMode } from "./components/SessionPanel";
-import { SearchOverlay } from "./components/SearchOverlay";
 import { api } from "./lib/api";
 import type { Session, TabType } from "./shared/ipc";
 
@@ -100,9 +99,6 @@ function App() {
 
   // Per-session live connection count, pushed from main.
   const [connStatus, setConnStatus] = useState<Record<string, number>>({});
-
-  // Search overlay (Cmd/Ctrl+K).
-  const [searchOpen, setSearchOpen] = useState(false);
 
   // Helper that updates tabs state AND persists in one shot. Persisting
   // here (in the handlers) instead of in a useEffect avoids racing the
@@ -219,8 +215,6 @@ function App() {
           { ...tabsBySession, [activeSessionId]: next },
           { ...activeTabBySession, [activeSessionId]: next[next.length - 1].id },
         );
-      } else if (action === "search") {
-        setSearchOpen((prev) => !prev);
       } else if (action === "themes") {
         setView((v) =>
           v.kind === "themes"
@@ -539,14 +533,6 @@ function App() {
         </main>
       </div>
       <StatusBar sessions={sessions.length} />
-      <SearchOverlay
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onNavigate={(sessionId) => {
-          handleSelectSession(sessionId);
-          setSearchOpen(false);
-        }}
-      />
     </div>
   );
 }

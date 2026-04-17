@@ -49,27 +49,6 @@ CREATE TABLE webview_sessions (
   title        TEXT
 );
 
-CREATE TABLE session_runs (
-  id          TEXT PRIMARY KEY,
-  session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  tab_name    TEXT,
-  started_at  INTEGER NOT NULL,
-  ended_at    INTEGER,
-  status      TEXT NOT NULL
-);
-CREATE INDEX idx_runs_session ON session_runs(session_id);
-
-CREATE TABLE transcript_chunks (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  run_id       TEXT REFERENCES session_runs(id) ON DELETE SET NULL,
-  seq          INTEGER NOT NULL,
-  created_at   INTEGER NOT NULL,
-  chunk_type   TEXT NOT NULL,
-  content_text TEXT NOT NULL
-);
-CREATE INDEX idx_chunks_session_seq ON transcript_chunks(session_id, seq);
-
 CREATE TABLE llm_messages (
   id          TEXT PRIMARY KEY,
   session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -78,18 +57,3 @@ CREATE TABLE llm_messages (
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX idx_msgs_session ON llm_messages(session_id);
-
-CREATE VIRTUAL TABLE transcript_fts USING fts5(
-  content_text,
-  content='transcript_chunks',
-  content_rowid='id'
-);
-
-CREATE TRIGGER transcript_chunks_ai AFTER INSERT ON transcript_chunks BEGIN
-  INSERT INTO transcript_fts(rowid, content_text) VALUES (new.id, new.content_text);
-END;
-
-CREATE TRIGGER transcript_chunks_ad AFTER DELETE ON transcript_chunks BEGIN
-  INSERT INTO transcript_fts(transcript_fts, rowid, content_text)
-  VALUES('delete', old.id, old.content_text);
-END;

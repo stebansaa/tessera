@@ -235,72 +235,6 @@ export interface ConnectionStatusEvent {
   liveCount: number;
 }
 
-// ── Transcripts ─────────────────────────────────────────────────
-
-/** A chunk of terminal output or a connection event marker. */
-export interface TranscriptChunk {
-  id: number;
-  sessionId: string;
-  runId: string | null;
-  seq: number;
-  createdAt: number;
-  /** 'output' = raw PTY data, 'event' = connection marker (JSON body). */
-  chunkType: "output" | "event";
-  contentText: string;
-}
-
-export interface LoadTranscriptRequest {
-  sessionId: string;
-  /** Load chunks with seq < before. Omit to load from the end. */
-  before?: number;
-  /** Max chunks to return. Defaults to 500 server-side. */
-  limit?: number;
-}
-
-export interface LoadTranscriptResponse {
-  chunks: TranscriptChunk[];
-  /** True if there are older chunks beyond the returned set. */
-  hasMore: boolean;
-}
-
-// ── Storage stats ───────────────────────────────────────────────────
-
-export interface SessionStorageStat {
-  sessionId: string;
-  sessionName: string;
-  chunkCount: number;
-  sizeBytes: number;
-}
-
-export interface StorageStats {
-  dbSizeBytes: number;
-  totalChunks: number;
-  totalBytes: number;
-  sessions: SessionStorageStat[];
-}
-
-// ── Search ──────────────────────────────────────────────────────────
-
-export interface SearchRequest {
-  query: string;
-  /** Restrict to a single session. Omit for global search. */
-  sessionId?: string;
-  limit?: number;
-}
-
-export interface SearchResult {
-  /** transcript_chunks.id */
-  chunkId: number;
-  sessionId: string;
-  sessionName: string;
-  /** Matching text snippet (raw from FTS). */
-  snippet: string;
-}
-
-export interface SearchResponse {
-  results: SearchResult[];
-}
-
 // ── Channel names ──────────────────────────────────────────────────
 
 export const IPC = {
@@ -331,14 +265,6 @@ export const IPC = {
     // connection status (main → renderer push, plus snapshot request)
     connStatus: "pty:connStatus",
     connStatusSnapshot: "pty:connStatusSnapshot",
-  },
-  transcripts: {
-    load: "transcripts:load",
-    clear: "transcripts:clear",
-    storageStats: "transcripts:storageStats",
-  },
-  search: {
-    fts: "search:fts",
   },
   system: {
     memoryUsage: "system:memoryUsage",
@@ -406,11 +332,6 @@ export interface RendererApi {
     ) => () => void;
     getConnStatusSnapshot: () => Promise<Record<string, number>>;
   };
-  transcripts: {
-    load: (req: LoadTranscriptRequest) => Promise<LoadTranscriptResponse>;
-    clear: (req: IdRequest) => Promise<void>;
-    storageStats: () => Promise<StorageStats>;
-  };
   settings: {
     getTheme: () => Promise<ThemeSettings>;
     setTheme: (theme: ThemeSettings) => Promise<void>;
@@ -418,9 +339,6 @@ export interface RendererApi {
     setTabs: (state: TabsState) => Promise<void>;
     getLastSession: () => Promise<string | null>;
     setLastSession: (id: string) => Promise<void>;
-  };
-  search: {
-    fts: (req: SearchRequest) => Promise<SearchResponse>;
   };
   system: {
     /** Returns total RSS of the Electron app in bytes. */

@@ -5,9 +5,6 @@ import type {
   CreateProjectRequest,
   CreateSessionRequest,
   IdRequest,
-  ReorderSessionRequest,
-  LoadTranscriptRequest,
-  LoadTranscriptResponse,
   OpenFileRequest,
   Project,
   PtyKillRequest,
@@ -17,11 +14,9 @@ import type {
   PtyWriteRequest,
   RenameRequest,
   RendererApi,
-  SearchRequest,
-  SearchResponse,
   Session,
   SessionDetails,
-  StorageStats,
+  ReorderSessionRequest,
   TabsState,
   ThemeSettings,
   UpdateSessionInput,
@@ -96,16 +91,6 @@ const api: RendererApi = {
     getConnStatusSnapshot: (): Promise<Record<string, number>> =>
       ipcRenderer.invoke(IPC.pty.connStatusSnapshot),
   },
-
-  transcripts: {
-    load: (req: LoadTranscriptRequest): Promise<LoadTranscriptResponse> =>
-      ipcRenderer.invoke(IPC.transcripts.load, req),
-    clear: (req: IdRequest): Promise<void> =>
-      ipcRenderer.invoke(IPC.transcripts.clear, req),
-    storageStats: (): Promise<StorageStats> =>
-      ipcRenderer.invoke(IPC.transcripts.storageStats),
-  },
-
   settings: {
     getTheme: (): Promise<ThemeSettings> =>
       ipcRenderer.invoke(IPC.settings.getTheme),
@@ -119,11 +104,6 @@ const api: RendererApi = {
       ipcRenderer.invoke(IPC.settings.getLastSession),
     setLastSession: (id: string): Promise<void> =>
       ipcRenderer.invoke(IPC.settings.setLastSession, id),
-  },
-
-  search: {
-    fts: (req: SearchRequest): Promise<SearchResponse> =>
-      ipcRenderer.invoke(IPC.search.fts, req),
   },
 
   system: {

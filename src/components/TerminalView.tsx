@@ -3,7 +3,6 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Eraser } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { useTheme } from "../lib/theme";
 import { getScheme } from "../lib/color-schemes";
@@ -18,77 +17,17 @@ const FONT_FALLBACK =
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 
-/** How many transcript chunks to load on mount and per scroll-back page. */
-const TRANSCRIPT_PAGE_SIZE = 200;
-
-/** Max bytes to replay on mount. Keeps high-throughput sessions fast. */
-const REPLAY_BYTE_CAP = 256 * 1024;
-
-/**
- * Format an epoch-ms timestamp into a short "Apr 9 14:32" string.
- */
-function fmtTime(ts: number): string {
-  const d = new Date(ts);
-  const mon = d.toLocaleString("en-US", { month: "short" });
-  const day = d.getDate();
-  const h = String(d.getHours()).padStart(2, "0");
-  const m = String(d.getMinutes()).padStart(2, "0");
-  return `${mon} ${day} ${h}:${m}`;
-}
-
-/**
- * Render an event chunk (JSON body) as an ANSI-styled divider line.
- * Returns the ANSI string to write into xterm.
- */
-function renderEventDivider(json: string, cols: number): string {
-  try {
-    const evt = JSON.parse(json) as {
-      type: string;
-      label?: string;
-      exitCode?: number | null;
-      signal?: number | null;
-      ts?: number;
-    };
-    const time = evt.ts ? fmtTime(evt.ts) : "";
-    let text: string;
-    if (evt.type === "connected") {
-      text = ` Connected to ${evt.label ?? "shell"} · ${time} `;
-    } else if (evt.type === "disconnected") {
-      const code =
-        evt.exitCode != null ? `exit ${evt.exitCode}` : "killed";
-      text = ` Disconnected · ${time} · ${code} `;
-    } else {
-      text = ` ${evt.type} · ${time} `;
-    }
-    // Pad with ─ to fill the terminal width.
-    const pad = Math.max(0, cols - text.length - 2);
-    const left = "─";
-    const right = "─".repeat(pad);
-    // dim + yellow-ish for connected, dim + red-ish for disconnected
-    const color = evt.type === "connected" ? "32" : "31"; // green / red
-    return `\r\n\x1b[2;${color}m${left}${text}${right}\x1b[0m\r\n`;
-  } catch {
-    return `\r\n\x1b[2m── event ──\x1b[0m\r\n`;
-  }
-}
-
 interface Props {
   /** Session id this terminal is bound to. When set, main routes the
    *  spawn through SQLite to pick local-pty vs ssh based on session.kind. */
   sessionId?: string;
-  /** Unique tab id — used to distinguish multiple terminal tabs within
-   *  the same session. */
-  tabId?: string;
-  /** When true this is the primary terminal tab for the session and its
-   *  transcript history is replayed on mount. Secondary tabs start fresh. */
-  isFirstTab?: boolean;
   /** Optional label shown in the connecting overlay (e.g. "root@1.2.3.4").
    *  When omitted (local PTY) the overlay is skipped entirely since local
    *  shells spawn instantly and the flash would just be visual noise. */
   connectingLabel?: string;
 }
 
-export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLabel }: Props) {
+export function TerminalView({ sessionId, connectingLabel }: Props) {
   // Connecting overlay is only meaningful for SSH — local PTYs are
   // ready before paint. We track first-byte-received separately from
   // the label so the overlay reacts correctly when the label resolves
@@ -124,11 +63,6 @@ export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLa
   // vars to refs so the reconnect function can tear down the old listeners.
   const disposeDataRef = useRef<(() => void) | null>(null);
   const disposeExitRef = useRef<(() => void) | null>(null);
-  // Transcript pagination — tracks whether there are older chunks to load
-  // and the lowest seq we've loaded so far, used as the `before` cursor.
-  const hasMoreRef = useRef(false);
-  const oldestSeqRef = useRef<number | null>(null);
-  const loadingMoreRef = useRef(false);
   const { theme } = useTheme();
   const { fontFamily, fontSize, colorScheme } = theme;
   const scheme = getScheme(colorScheme);
@@ -174,9 +108,6 @@ export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLa
       });
 
       disposeExitRef.current = window.api.pty.onExit(id, (info) => {
-        // Render a disconnected divider immediately (the same data is
-        // being persisted by the TranscriptWriter on the main side, so
-        // on next replay the same line appears from the stored event).
         const code =
           info.exitCode != null ? `exit ${info.exitCode}` : "killed";
         const ts = Date.now();
@@ -207,11 +138,6 @@ export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLa
     setExited(false);
     exitedRef.current = false;
     setHasReceivedData(false);
-
-    // The "connected" divider is also written by the TranscriptWriter
-    // on the main side once the spawn succeeds. Here we render it
-    // immediately for feedback — the replayed version on next launch
-    // will match because both use the same event shape.
 
     try {
       const { ptyId: newId } = await window.api.pty.spawn({
@@ -274,53 +200,6 @@ export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLa
     let disposed = false;
 
     (async () => {
-      // Replay the most recent transcript page from SQLite before spawning.
-      // Only the first (primary) terminal tab replays history — secondary
-      // tabs start with a clean slate.
-      if (sessionId && isFirstTab) {
-        try {
-          const { chunks, hasMore } = await window.api.transcripts.load({
-            sessionId,
-            limit: TRANSCRIPT_PAGE_SIZE,
-          });
-          if (disposed) return;
-          // Cap replay by byte size so high-throughput sessions (e.g.
-          // minutes of `ping`) don't freeze the terminal on mount.
-          // Walk backwards from the end to find which chunks fit.
-          let replayBytes = 0;
-          let startIdx = chunks.length;
-          for (let i = chunks.length - 1; i >= 0; i--) {
-            replayBytes += chunks[i].contentText.length;
-            if (replayBytes > REPLAY_BYTE_CAP) break;
-            startIdx = i;
-          }
-          const trimmedChunks = chunks.slice(startIdx);
-          const trimmedHasMore = hasMore || startIdx > 0;
-
-          hasMoreRef.current = trimmedHasMore;
-          if (trimmedChunks.length > 0) {
-            oldestSeqRef.current = trimmedChunks[0].seq;
-            if (trimmedHasMore) {
-              term.writeln(
-                "\x1b[2m── scroll up to load older history ──\x1b[0m",
-              );
-            }
-          }
-          // Batch all chunks into a single string before writing to xterm.
-          let replay = "";
-          for (const chunk of trimmedChunks) {
-            if (chunk.chunkType === "event") {
-              replay += renderEventDivider(chunk.contentText, term.cols);
-            } else {
-              replay += chunk.contentText;
-            }
-          }
-          if (replay) term.write(replay);
-        } catch (err) {
-          console.warn("[TerminalView] transcript load failed:", err);
-        }
-      }
-
       try {
         const { ptyId: id } = await window.api.pty.spawn({
           sessionId,
@@ -393,66 +272,7 @@ export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLa
     const ro = new ResizeObserver(onResize);
     ro.observe(ref.current);
 
-    // Lazy-load older transcript pages when the user scrolls to the top
-    // of the scrollback buffer. xterm fires onScroll with the new
-    // viewportY; when it hits 0 we fetch the previous page.
-    const scrollDispose = term.onScroll(() => {
-      if (
-        !sessionId ||
-        !hasMoreRef.current ||
-        loadingMoreRef.current ||
-        term.buffer.active.viewportY > 0
-      ) {
-        return;
-      }
-      loadingMoreRef.current = true;
-      const before = oldestSeqRef.current ?? undefined;
-      window.api.transcripts
-        .load({ sessionId, before, limit: TRANSCRIPT_PAGE_SIZE })
-        .then(({ chunks, hasMore }) => {
-          if (disposed || chunks.length === 0) {
-            loadingMoreRef.current = false;
-            hasMoreRef.current = false;
-            return;
-          }
-          hasMoreRef.current = hasMore;
-          oldestSeqRef.current = chunks[0].seq;
-
-          // Build the full replay string for the older page, then
-          // prepend it. We use a write at the very start of the
-          // buffer — xterm doesn't support direct buffer prepend, so
-          // we save cursor, go to top, insert lines, write content,
-          // and restore. This is imperfect for ANSI state but good
-          // enough for scrollback history.
-          let content = hasMore
-            ? "\x1b[2m── scroll up to load older history ──\x1b[0m\r\n"
-            : "";
-          for (const chunk of chunks) {
-            content +=
-              chunk.chunkType === "event"
-                ? renderEventDivider(chunk.contentText, term.cols)
-                : chunk.contentText;
-          }
-          // Count approximate lines added so we can adjust scroll.
-          const lineCount = content.split("\n").length;
-
-          // Save state, scroll to top, insert blank lines, write
-          // content at those lines, restore position.
-          term.write("\x1b7"); // DECSC save cursor
-          term.write(`\x1b[${lineCount}S`); // scroll up N lines
-          term.write("\x1b[H"); // cursor to top-left
-          term.write(content);
-          term.write("\x1b8"); // DECRC restore cursor
-
-          loadingMoreRef.current = false;
-        })
-        .catch(() => {
-          loadingMoreRef.current = false;
-        });
-    });
-
     return () => {
-      scrollDispose.dispose();
       container.removeEventListener("contextmenu", onContextMenu);
       disposed = true;
       window.removeEventListener("resize", onResize);
@@ -501,38 +321,9 @@ export function TerminalView({ sessionId, tabId, isFirstTab = true, connectingLa
     setCtxMenu(null);
   }, []);
 
-  const clearHistory = useCallback(async () => {
-    if (!sessionId) return;
-    const ok = window.confirm(
-      "Clear all saved history for this connection?\n\nThis removes the stored transcript permanently. The live terminal session is not affected.",
-    );
-    if (!ok) return;
-    try {
-      await window.api.transcripts.clear({ id: sessionId });
-    } catch (err) {
-      console.error("[TerminalView] clear transcript failed:", err);
-    }
-    const term = termRef.current;
-    if (term) {
-      term.clear();
-      term.write("\x1b[2m── history cleared ──\x1b[0m\r\n");
-    }
-    hasMoreRef.current = false;
-    oldestSeqRef.current = null;
-  }, [sessionId]);
-
   return (
     <div className="group/term relative h-full w-full">
       <div ref={ref} className="h-full w-full" />
-      {sessionId && isFirstTab && !showConnecting && (
-        <button
-          onClick={clearHistory}
-          title="Clear history"
-          className="absolute right-2 top-2 z-10 rounded p-1.5 text-fg-muted opacity-0 transition hover:bg-white/[0.08] hover:text-fg group-hover/term:opacity-100"
-        >
-          <Eraser size={14} />
-        </button>
-      )}
       {showConnecting && connectingLabel && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-bg/85">
           <div className="flex items-center gap-3 rounded-md border border-divider bg-bg-header px-4 py-2.5 text-sm text-fg-bright shadow-lg">

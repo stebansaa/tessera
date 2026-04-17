@@ -19,10 +19,7 @@ import { registerProjectHandlers } from "../ipc/projects";
 import { registerSessionHandlers } from "../ipc/sessions";
 import { registerSettingsHandlers } from "../ipc/settings";
 import { registerDialogHandlers } from "../ipc/dialog";
-import { registerTranscriptHandlers } from "../ipc/transcripts";
-import { registerSearchHandlers } from "../ipc/search";
 import { spawnSsh, type Connection } from "../ssh/spawn";
-import { TranscriptWriter } from "../pty/transcript-writer";
 
 // ── Connection pool ────────────────────────────────────────────────
 //
@@ -35,8 +32,6 @@ const connections = new Map<string, Connection>();
 const sessionPtys = new Map<string, Set<string>>();
 /** Reverse lookup: ptyId → sessionId. Needed by the kill handler. */
 const ptyToSession = new Map<string, string>();
-/** Per-ptyId transcript writers — buffer PTY output → SQLite chunks. */
-const writers = new Map<string, TranscriptWriter>();
 
 function expandHomePath(p?: string): string | undefined {
   if (!p) return p;
@@ -181,65 +176,13 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
           console.warn("[main] touchSession failed:", err);
         }
       }
-
-      // ── Transcript writer ──────────────────────────────────────
-      // Create a run and a writer that buffers PTY output → SQLite.
-      let writer: TranscriptWriter | null = null;
-      if (req.sessionId) {
-        try {
-          const runId = repo.createRun(req.sessionId);
-          const seq = repo.nextSeq(req.sessionId);
-          writer = new TranscriptWriter(repo, req.sessionId, runId, seq);
-          writers.set(ptyId, writer);
-
-          // "Connected" event marker — rendered as a divider on replay.
-          const label =
-            details?.kind === "ssh" && details.terminal
-              ? `${details.terminal.username ?? ""}@${details.terminal.host ?? ""}`
-              : "local shell";
-          writer.writeEvent(
-            JSON.stringify({
-              type: "connected",
-              label,
-              ts: Date.now(),
-            }),
-          );
-        } catch (err) {
-          console.warn("[main] transcript writer setup failed:", err);
-        }
-      }
-
       conn.onData((data) => {
         if (!win.isDestroyed()) {
           win.webContents.send(`${IPC.pty.dataPrefix}${ptyId}`, data);
         }
-        writer?.write(data);
       });
 
       conn.onExit(({ exitCode, signal }) => {
-        // Write "disconnected" event before flushing/closing the writer.
-        const w = writers.get(ptyId);
-        if (w) {
-          w.writeEvent(
-            JSON.stringify({
-              type: "disconnected",
-              exitCode,
-              signal: signal ?? null,
-              ts: Date.now(),
-            }),
-          );
-          w.close();
-          try {
-            repo.endRun(
-              w.runId,
-              exitCode === 0 ? "ended" : "crashed",
-            );
-          } catch (err) {
-            console.warn("[main] endRun failed:", err);
-          }
-          writers.delete(ptyId);
-        }
-
         if (!win.isDestroyed()) {
           win.webContents.send(`${IPC.pty.exitPrefix}${ptyId}`, {
             exitCode,
@@ -264,18 +207,6 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
   });
 
   ipcMain.handle(IPC.pty.kill, async (_evt, req: PtyKillRequest) => {
-    // Flush + close transcript writer before killing the connection.
-    const w = writers.get(req.ptyId);
-    if (w) {
-      w.writeEvent(
-        JSON.stringify({ type: "disconnected", exitCode: null, signal: null, ts: Date.now() }),
-      );
-      w.close();
-      try {
-        repo.endRun(w.runId, "ended");
-      } catch { /* noop */ }
-      writers.delete(req.ptyId);
-    }
     connections.get(req.ptyId)?.kill();
     connections.delete(req.ptyId);
     const sid = untrackPty(req.ptyId);
@@ -384,12 +315,8 @@ function createWindow(repo: Repo) {
         },
         { type: "separator" },
         {
-          label: "Find",
-          accelerator: "CmdOrCtrl+F",
-          click: () => win.webContents.send(IPC.shortcuts.action, "search"),
+          role: "resetZoom",
         },
-        { type: "separator" },
-        { role: "resetZoom" },
         { role: "zoomIn" },
         { role: "zoomOut" },
         { type: "separator" },
@@ -417,9 +344,6 @@ function createWindow(repo: Repo) {
     } else if (input.key === "w" && !input.shift && !input.alt) {
       event.preventDefault();
       win.webContents.send(IPC.shortcuts.action, "closeTab");
-    } else if (input.key === "f" && !input.shift && !input.alt) {
-      event.preventDefault();
-      win.webContents.send(IPC.shortcuts.action, "search");
     } else if (input.key >= "1" && input.key <= "9" && !input.shift && !input.alt) {
       event.preventDefault();
       win.webContents.send(IPC.shortcuts.action, `switchTab:${input.key}`);
@@ -441,8 +365,6 @@ app.whenReady().then(() => {
   registerProjectHandlers(repo);
   registerSessionHandlers(repo);
   registerSettingsHandlers(repo);
-  registerTranscriptHandlers(repo);
-  registerSearchHandlers(repo);
   registerDialogHandlers();
 
   // Lightweight system info — returns total RSS in bytes.
@@ -471,14 +393,6 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  // Flush and close all transcript writers before killing connections.
-  for (const w of writers.values()) {
-    try {
-      w.close();
-    } catch { /* noop */ }
-  }
-  writers.clear();
-
   // Tear down any leftover PTYs / SSH connections
   for (const conn of connections.values()) {
     try {

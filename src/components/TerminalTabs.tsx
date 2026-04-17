@@ -62,8 +62,6 @@ export function TerminalTabs({
             ) : (
               <TerminalView
                 sessionId={sessionId}
-                tabId={tab.id}
-                isFirstTab={tab.id === tabs.find((t) => t.type === "terminal")?.id}
                 connectingLabel={connectingLabel}
               />
             )}

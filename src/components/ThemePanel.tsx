@@ -1,9 +1,6 @@
-import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
 import { useTheme } from "../lib/theme";
 import { COLOR_SCHEMES } from "../lib/color-schemes";
-import { api } from "../lib/api";
-import type { StorageStats, ThemeSettings } from "../shared/ipc";
+import type { ThemeSettings } from "../shared/ipc";
 
 /**
  * Appearance settings page. Lives inside SessionPanel as an overlay.
@@ -175,101 +172,9 @@ export function ThemePanel() {
               </div>
             </div>
           </Field>
-
-          <StorageSection />
         </div>
       </div>
     </div>
-  );
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function StorageSection() {
-  const [stats, setStats] = useState<StorageStats | null>(null);
-
-  const load = () => api.transcripts.storageStats().then(setStats);
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const clearSession = async (sessionId: string) => {
-    await api.transcripts.clear({ id: sessionId });
-    load();
-  };
-
-  const clearAll = async () => {
-    if (!stats) return;
-    for (const s of stats.sessions) {
-      await api.transcripts.clear({ id: s.sessionId });
-    }
-    load();
-  };
-
-  if (!stats) return null;
-
-  return (
-    <Field label="Storage">
-      <div className="space-y-3">
-        {/* Summary */}
-        <div className="flex items-center justify-between rounded border border-divider bg-bg-header px-3 py-2.5 text-sm">
-          <div className="space-y-0.5">
-            <div className="text-fg">
-              {stats.sessions.length} connection{stats.sessions.length !== 1 ? "s" : ""}
-              {" · "}
-              {formatSize(stats.totalBytes)} history
-            </div>
-            <div className="text-xs text-fg-muted">
-              Database: {formatSize(stats.dbSizeBytes)}
-            </div>
-          </div>
-          {stats.totalChunks > 0 && (
-            <button
-              onClick={clearAll}
-              className="rounded px-2 py-1 text-xs text-fg-muted transition hover:bg-white/[0.06] hover:text-fg"
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-
-        {/* Per-session breakdown */}
-        {stats.sessions.length > 0 && (
-          <div className="rounded border border-divider">
-            {stats.sessions.map((s, i) => (
-              <div
-                key={s.sessionId}
-                className={[
-                  "flex items-center justify-between px-3 py-2 text-sm",
-                  i > 0 ? "border-t border-divider" : "",
-                ].join(" ")}
-              >
-                <div>
-                  <span className="text-fg">{s.sessionName}</span>
-                  <span className="ml-2 text-xs text-fg-muted">
-                    {s.chunkCount} chunks · {formatSize(s.sizeBytes)}
-                  </span>
-                </div>
-                <button
-                  onClick={() => clearSession(s.sessionId)}
-                  title={`Clear history for ${s.sessionName}`}
-                  className="rounded p-1 text-fg-muted transition hover:bg-white/[0.06] hover:text-fg"
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </Field>
   );
 }
 
