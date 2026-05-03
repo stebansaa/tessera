@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type {
+  BriefSettings,
   Session,
   SessionKind,
   SshAuthMethod,
@@ -16,6 +17,7 @@ interface Props {
   onSaved: (session: Session) => void;
   onCancel: () => void;
   onDeleted?: (sessionId: string) => void;
+  onBriefSettingsChanged?: (settings: BriefSettings) => void;
 }
 
 const KINDS: { value: SessionKind; label: string }[] = [
@@ -36,6 +38,8 @@ const EMPTY_TERMINAL: TerminalDetails = {
   port: null,
   authMethod: null,
   identityFile: null,
+  sshOptimisticEcho: true,
+  liveBriefEnabled: false,
   hasPassword: false,
 };
 
@@ -53,6 +57,7 @@ export function SessionForm({
   onSaved,
   onCancel,
   onDeleted,
+  onBriefSettingsChanged,
 }: Props) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<SessionKind>("local");
@@ -66,6 +71,10 @@ export function SessionForm({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteInput, setDeleteInput] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [briefSettings, setBriefSettings] = useState<BriefSettings | null>(null);
+  const [openRouterKey, setOpenRouterKey] = useState("");
+  const [testingKey, setTestingKey] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
 
   const nameRef = useRef<HTMLInputElement | null>(null);
 
@@ -92,6 +101,22 @@ export function SessionForm({
   useEffect(() => {
     if (mode.kind === "create") nameRef.current?.focus();
   }, [mode.kind]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.brief.getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        setBriefSettings(settings);
+        onBriefSettingsChanged?.(settings);
+      })
+      .catch((err) => {
+        if (!cancelled) setKeyError((err as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onBriefSettingsChanged]);
 
   // Esc cancels
   useEffect(() => {
@@ -157,6 +182,13 @@ export function SessionForm({
             isSsh && authMethod === "key"
               ? terminal.identityFile?.trim() || null
               : null,
+          sshOptimisticEcho: isSsh
+            ? terminal.sshOptimisticEcho !== false
+            : false,
+          liveBriefEnabled:
+            isTerminal &&
+            briefSettings?.hasValidApiKey === true &&
+            terminal.liveBriefEnabled === true,
           password:
             isSsh && authMethod === "password" && password.length > 0
               ? password
@@ -179,6 +211,12 @@ export function SessionForm({
                   isSsh && authMethod === "key"
                     ? terminal.identityFile?.trim() || null
                     : null,
+                sshOptimisticEcho: isSsh
+                  ? terminal.sshOptimisticEcho !== false
+                  : false,
+                liveBriefEnabled:
+                  briefSettings?.hasValidApiKey === true &&
+                  terminal.liveBriefEnabled === true,
                 password: passwordForUpdate(),
               }
             : null,
@@ -201,6 +239,37 @@ export function SessionForm({
 
   const updateTerminal = (patch: Partial<TerminalDetails>) =>
     setTerminal((t) => ({ ...t, ...patch }));
+
+  const saveAndTestOpenRouterKey = async () => {
+    const key = openRouterKey.trim();
+    if (!key) return;
+    setTestingKey(true);
+    setKeyError(null);
+    try {
+      const settings = await api.brief.setApiKey({ apiKey: key });
+      setBriefSettings(settings);
+      onBriefSettingsChanged?.(settings);
+      setOpenRouterKey("");
+    } catch (err) {
+      setKeyError((err as Error).message);
+    } finally {
+      setTestingKey(false);
+    }
+  };
+
+  const testSavedOpenRouterKey = async () => {
+    setTestingKey(true);
+    setKeyError(null);
+    try {
+      const settings = await api.brief.validateApiKey();
+      setBriefSettings(settings);
+      onBriefSettingsChanged?.(settings);
+    } catch (err) {
+      setKeyError((err as Error).message);
+    } finally {
+      setTestingKey(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -273,6 +342,92 @@ export function SessionForm({
                 className="w-full rounded border border-divider bg-bg-header px-3 py-2 text-sm text-fg outline-none focus:border-accent"
               />
             </Field>
+
+            <SectionDivider label="Live brief" />
+
+            <Field label="OpenRouter">
+              {briefSettings?.hasValidApiKey ? (
+                <div className="space-y-2 rounded border border-divider bg-bg-header p-3">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-fg-bright">
+                      Global API key validated
+                    </span>
+                    <span className="truncate text-xs text-fg-muted">
+                      {briefSettings.keyLabel ?? briefSettings.model}
+                    </span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-fg-muted">
+                    This key is shared by all connections. Enable live brief
+                    below for each connection that should use it.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 rounded border border-divider bg-bg-header p-3">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-fg-bright">
+                      {briefSettings?.hasApiKey
+                        ? "API key saved, not validated"
+                        : "No validated API key"}
+                    </span>
+                    <span className="truncate text-xs text-fg-muted">
+                      {briefSettings?.model ?? ""}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={openRouterKey}
+                      onChange={(e) => setOpenRouterKey(e.target.value)}
+                      placeholder="OpenRouter API key"
+                      className="min-w-0 flex-1 rounded border border-divider bg-bg px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveAndTestOpenRouterKey}
+                      disabled={!openRouterKey.trim() || testingKey}
+                      className="shrink-0 rounded bg-accent px-3 py-2 text-sm font-medium text-bg transition disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {testingKey ? "Testing…" : "Save & test"}
+                    </button>
+                  </div>
+                  {briefSettings?.hasApiKey && !openRouterKey.trim() && (
+                    <button
+                      type="button"
+                      onClick={testSavedOpenRouterKey}
+                      disabled={testingKey}
+                      className="rounded border border-divider px-3 py-1.5 text-xs text-fg-dim transition hover:bg-white/[0.06] hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Test saved key
+                    </button>
+                  )}
+                  {keyError && <p className="text-xs text-red-400">{keyError}</p>}
+                </div>
+              )}
+            </Field>
+
+            <Field label="Brief behavior">
+              <div className="flex items-start gap-3 rounded border border-divider bg-bg-header px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={terminal.liveBriefEnabled === true}
+                  disabled={!briefSettings?.hasValidApiKey}
+                  onChange={(e) =>
+                    updateTerminal({ liveBriefEnabled: e.target.checked })
+                  }
+                  className="mt-0.5 h-4 w-4 accent-accent disabled:opacity-40"
+                />
+                <span>
+                  <span className="block text-sm text-fg-bright">
+                    Enable live brief for this connection
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-fg-muted">
+                    When enabled, the right brief panel appears and starts
+                    automatically. Tessera adds AGENTS.md or CLAUDE.md context
+                    from the configured working directory when available.
+                  </span>
+                </span>
+              </div>
+            </Field>
           </>
         )}
 
@@ -337,6 +492,29 @@ export function SessionForm({
                     </button>
                   );
                 })}
+              </div>
+            </Field>
+
+            <Field label="Typing latency">
+              <div className="flex items-start gap-3 rounded border border-divider bg-bg-header px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={terminal.sshOptimisticEcho !== false}
+                  onChange={(e) =>
+                    updateTerminal({ sshOptimisticEcho: e.target.checked })
+                  }
+                  className="mt-0.5 h-4 w-4 accent-accent"
+                />
+                <span>
+                  <span className="block text-sm text-fg-bright">
+                    Reduce SSH typing latency
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-fg-muted">
+                    Shows safe typed characters immediately, then auto-pauses for
+                    password prompts, paste, and full-screen tools like vim,
+                    nano, and top.
+                  </span>
+                </span>
               </div>
             </Field>
 

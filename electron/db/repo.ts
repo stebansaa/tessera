@@ -34,6 +34,22 @@ function encryptPassword(plain: string | null | undefined): Buffer | null {
   return safeStorage.encryptString(plain);
 }
 
+function encryptSecret(plain: string | null | undefined): string | null {
+  if (!plain) return null;
+  if (!safeStorage.isEncryptionAvailable()) return null;
+  return safeStorage.encryptString(plain).toString("base64");
+}
+
+function decryptSecret(encoded: string | null | undefined): string | null {
+  if (!encoded || !safeStorage.isEncryptionAvailable()) return null;
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, "base64"));
+  } catch (err) {
+    console.error("[repo] failed to decrypt secret:", err);
+    return null;
+  }
+}
+
 /**
  * Projects + sessions repository.
  *
@@ -98,6 +114,8 @@ export interface CreateSessionInput {
   port?: number | null;
   authMethod?: SshAuthMethod | null;
   identityFile?: string | null;
+  sshOptimisticEcho?: boolean | null;
+  liveBriefEnabled?: boolean | null;
   /** Cleartext on the way in only — encrypted before write. */
   password?: string | null;
 }
@@ -136,8 +154,9 @@ export function createRepo(db: Database.Database) {
     insertTerminal: db.prepare(`
       INSERT INTO terminal_sessions
         (session_id, mode, shell_path, start_dir, host, username, port,
-         auth_method, identity_file, password_enc)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         auth_method, identity_file, password_enc, ssh_optimistic_echo,
+         live_brief_enabled)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     insertLlm: db.prepare(`
       INSERT INTO llm_sessions (session_id, provider, model) VALUES (?, ?, ?)
@@ -155,7 +174,8 @@ export function createRepo(db: Database.Database) {
     updateTerminal: db.prepare(`
       UPDATE terminal_sessions
       SET shell_path = ?, start_dir = ?, host = ?, username = ?, port = ?,
-          auth_method = ?, identity_file = ?
+          auth_method = ?, identity_file = ?, ssh_optimistic_echo = ?,
+          live_brief_enabled = ?
       WHERE session_id = ?
     `),
     /** Separate statement so the password update is opt-in (omitting the
@@ -173,6 +193,8 @@ export function createRepo(db: Database.Database) {
     selectTerminal: db.prepare(`
       SELECT shell_path, start_dir, host, username, port,
              auth_method, identity_file,
+             ssh_optimistic_echo,
+             live_brief_enabled,
              (password_enc IS NOT NULL) AS has_password
       FROM terminal_sessions WHERE session_id = ?
     `),
@@ -207,6 +229,9 @@ export function createRepo(db: Database.Database) {
 
   const THEME_KEY = "theme";
   const TABS_KEY = "tabs";
+  const OPENROUTER_API_KEY = "openrouter_api_key";
+  const OPENROUTER_API_KEY_VALIDATED_AT = "openrouter_api_key_validated_at";
+  const OPENROUTER_API_KEY_LABEL = "openrouter_api_key_label";
 
   return {
     listProjects(): Project[] {
@@ -273,6 +298,8 @@ export function createRepo(db: Database.Database) {
             input.kind === "ssh" ? (input.authMethod ?? null) : null,
             input.kind === "ssh" ? (input.identityFile ?? null) : null,
             passwordEnc,
+            input.kind === "ssh" && input.sshOptimisticEcho !== false ? 1 : 0,
+            input.liveBriefEnabled === true ? 1 : 0,
           );
         } else if (type === "llm") {
           stmts.insertLlm.run(id, "openai", "gpt-4o-mini");
@@ -309,6 +336,8 @@ export function createRepo(db: Database.Database) {
               port: number | null;
               auth_method: SshAuthMethod | null;
               identity_file: string | null;
+              ssh_optimistic_echo: number;
+              live_brief_enabled: number;
               has_password: number;
             }
           | undefined;
@@ -321,6 +350,8 @@ export function createRepo(db: Database.Database) {
             port: t.port,
             authMethod: t.auth_method,
             identityFile: t.identity_file,
+            sshOptimisticEcho: t.ssh_optimistic_echo !== 0,
+            liveBriefEnabled: t.live_brief_enabled === 1,
             hasPassword: t.has_password === 1,
           };
         }
@@ -349,6 +380,8 @@ export function createRepo(db: Database.Database) {
             t.port ?? null,
             t.authMethod ?? null,
             t.identityFile ?? null,
+            t.sshOptimisticEcho !== false ? 1 : 0,
+            t.liveBriefEnabled === true ? 1 : 0,
             input.id,
           );
           // Password is opt-in:
@@ -468,6 +501,47 @@ export function createRepo(db: Database.Database) {
     },
     setSetting(key: string, value: string): void {
       stmts.upsertSetting.run(key, value, Date.now());
+    },
+
+    hasOpenRouterApiKey(): boolean {
+      return Boolean(this.getOpenRouterApiKey());
+    },
+
+    setOpenRouterApiKey(apiKey: string | null): void {
+      if (!apiKey) {
+        stmts.upsertSetting.run(OPENROUTER_API_KEY, "", Date.now());
+        stmts.upsertSetting.run(OPENROUTER_API_KEY_VALIDATED_AT, "", Date.now());
+        stmts.upsertSetting.run(OPENROUTER_API_KEY_LABEL, "", Date.now());
+        return;
+      }
+      const encrypted = encryptSecret(apiKey);
+      if (!encrypted) {
+        throw new Error("OS keychain encryption is unavailable.");
+      }
+      stmts.upsertSetting.run(OPENROUTER_API_KEY, encrypted, Date.now());
+      stmts.upsertSetting.run(OPENROUTER_API_KEY_VALIDATED_AT, "", Date.now());
+      stmts.upsertSetting.run(OPENROUTER_API_KEY_LABEL, "", Date.now());
+    },
+
+    getOpenRouterApiKey(): string | null {
+      return decryptSecret(this.getSetting(OPENROUTER_API_KEY));
+    },
+
+    markOpenRouterApiKeyValid(label: string | null): void {
+      stmts.upsertSetting.run(
+        OPENROUTER_API_KEY_VALIDATED_AT,
+        String(Date.now()),
+        Date.now(),
+      );
+      stmts.upsertSetting.run(OPENROUTER_API_KEY_LABEL, label ?? "", Date.now());
+    },
+
+    hasValidOpenRouterApiKey(): boolean {
+      return Boolean(this.getOpenRouterApiKey() && this.getSetting(OPENROUTER_API_KEY_VALIDATED_AT));
+    },
+
+    getOpenRouterApiKeyLabel(): string | null {
+      return this.getSetting(OPENROUTER_API_KEY_LABEL) || null;
     },
 
     /**

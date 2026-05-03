@@ -70,6 +70,10 @@ export interface TerminalDetails {
   port: number | null;
   authMethod: SshAuthMethod | null;
   identityFile: string | null;
+  /** SSH only. Optimistically local-echoes safe printable input to hide latency. */
+  sshOptimisticEcho: boolean;
+  /** Terminal sessions only. When true, a validated OpenRouter key auto-starts the side brief. */
+  liveBriefEnabled: boolean;
   /** True if `password_enc` is set in the DB. */
   hasPassword: boolean;
 }
@@ -89,6 +93,8 @@ export interface TerminalDetailsInput {
   port?: number | null;
   authMethod?: SshAuthMethod | null;
   identityFile?: string | null;
+  sshOptimisticEcho?: boolean | null;
+  liveBriefEnabled?: boolean | null;
   password?: string | null;
 }
 
@@ -110,6 +116,8 @@ export interface CreateSessionRequest {
   // SSH auth (only used when kind is ssh)
   authMethod?: SshAuthMethod | null;
   identityFile?: string | null;
+  sshOptimisticEcho?: boolean | null;
+  liveBriefEnabled?: boolean | null;
   /** Cleartext on the way in only — see TerminalDetailsInput. */
   password?: string | null;
 }
@@ -235,6 +243,52 @@ export interface ConnectionStatusEvent {
   liveCount: number;
 }
 
+// ── Live brief / OpenRouter ────────────────────────────────────────
+
+export interface BriefTerminalEvent {
+  ts: number;
+  sessionId: string;
+  tabId: string;
+  stream: "input" | "output" | "system";
+  text: string;
+}
+
+export interface BriefSummary {
+  now: string;
+  recent: string[];
+  issues: string[];
+  next: string[];
+  contextFile?: string | null;
+  updatedAt: number;
+}
+
+export interface BriefSettings {
+  hasApiKey: boolean;
+  hasValidApiKey: boolean;
+  keyLabel: string | null;
+  model: string;
+}
+
+export interface SetBriefApiKeyRequest {
+  apiKey: string | null;
+}
+
+export interface ValidateBriefApiKeyRequest {
+  apiKey?: string | null;
+}
+
+export interface SummarizeBriefRequest {
+  sessionId: string;
+  sessionName: string;
+  model?: string;
+  previousSummary?: BriefSummary | null;
+  events: BriefTerminalEvent[];
+}
+
+export interface SummarizeBriefResponse {
+  summary: BriefSummary;
+}
+
 // ── Channel names ──────────────────────────────────────────────────
 
 export const IPC = {
@@ -282,6 +336,12 @@ export const IPC = {
     setTabs: "settings:setTabs",
     getLastSession: "settings:getLastSession",
     setLastSession: "settings:setLastSession",
+  },
+  brief: {
+    getSettings: "brief:getSettings",
+    setApiKey: "brief:setApiKey",
+    validateApiKey: "brief:validateApiKey",
+    summarize: "brief:summarize",
   },
   dialog: {
     openFile: "dialog:openFile",
@@ -339,6 +399,12 @@ export interface RendererApi {
     setTabs: (state: TabsState) => Promise<void>;
     getLastSession: () => Promise<string | null>;
     setLastSession: (id: string) => Promise<void>;
+  };
+  brief: {
+    getSettings: () => Promise<BriefSettings>;
+    setApiKey: (req: SetBriefApiKeyRequest) => Promise<BriefSettings>;
+    validateApiKey: (req?: ValidateBriefApiKeyRequest) => Promise<BriefSettings>;
+    summarize: (req: SummarizeBriefRequest) => Promise<SummarizeBriefResponse>;
   };
   system: {
     /** Returns total RSS of the Electron app in bytes. */

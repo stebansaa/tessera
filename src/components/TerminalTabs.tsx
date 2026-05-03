@@ -1,6 +1,6 @@
-import { TerminalView } from "./TerminalView";
+import { TerminalView, type TerminalTransferEvent } from "./TerminalView";
 import { WebviewTab } from "./WebviewTab";
-import type { TabType } from "../shared/ipc";
+import type { BriefTerminalEvent, TabType } from "../shared/ipc";
 
 /**
  * Renders one view per tab (TerminalView or WebviewTab) and only shows
@@ -30,7 +30,10 @@ interface Props {
   /** Optional "user@host" label, set only for SSH sessions, used by
    *  TerminalView to render the connecting overlay before first byte. */
   connectingLabel?: string;
+  optimisticEcho?: boolean;
   onTabUrlChange: (sessionId: string, tabId: string, url: string) => void;
+  onBriefEvent?: (event: BriefTerminalEvent) => void;
+  onTransfer?: (event: TerminalTransferEvent) => void;
 }
 
 export function TerminalTabs({
@@ -38,7 +41,10 @@ export function TerminalTabs({
   tabs,
   activeTabId,
   connectingLabel,
+  optimisticEcho = false,
   onTabUrlChange,
+  onBriefEvent,
+  onTransfer,
 }: Props) {
   return (
     <div className="relative h-full w-full">
@@ -62,7 +68,11 @@ export function TerminalTabs({
             ) : (
               <TerminalView
                 sessionId={sessionId}
+                tabId={tab.id}
                 connectingLabel={connectingLabel}
+                optimisticEcho={optimisticEcho}
+                onBriefEvent={onBriefEvent}
+                onTransfer={onTransfer}
               />
             )}
           </div>

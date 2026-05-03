@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import { IPC } from "../../src/shared/ipc";
 import type {
   ConnectionStatusEvent,
+  BriefSettings,
   CreateProjectRequest,
   CreateSessionRequest,
   IdRequest,
@@ -14,12 +15,16 @@ import type {
   PtyWriteRequest,
   RenameRequest,
   RendererApi,
+  SetBriefApiKeyRequest,
   Session,
   SessionDetails,
   ReorderSessionRequest,
+  SummarizeBriefRequest,
+  SummarizeBriefResponse,
   TabsState,
   ThemeSettings,
   UpdateSessionInput,
+  ValidateBriefApiKeyRequest,
 } from "../../src/shared/ipc";
 
 const api: RendererApi = {
@@ -104,6 +109,21 @@ const api: RendererApi = {
       ipcRenderer.invoke(IPC.settings.getLastSession),
     setLastSession: (id: string): Promise<void> =>
       ipcRenderer.invoke(IPC.settings.setLastSession, id),
+  },
+
+  brief: {
+    getSettings: (): Promise<BriefSettings> =>
+      ipcRenderer.invoke(IPC.brief.getSettings),
+    setApiKey: (req: SetBriefApiKeyRequest): Promise<BriefSettings> =>
+      ipcRenderer.invoke(IPC.brief.setApiKey, req),
+    validateApiKey: (
+      req?: ValidateBriefApiKeyRequest,
+    ): Promise<BriefSettings> =>
+      ipcRenderer.invoke(IPC.brief.validateApiKey, req),
+    summarize: (
+      req: SummarizeBriefRequest,
+    ): Promise<SummarizeBriefResponse> =>
+      ipcRenderer.invoke(IPC.brief.summarize, req),
   },
 
   system: {

@@ -3,7 +3,8 @@ import { TerminalTabs } from "./TerminalTabs";
 import { SessionForm } from "./SessionForm";
 import { ThemePanel } from "./ThemePanel";
 import { api } from "../lib/api";
-import type { Session, TabType } from "../shared/ipc";
+import type { TerminalTransferEvent } from "./TerminalView";
+import type { BriefSettings, BriefTerminalEvent, Session, TabType } from "../shared/ipc";
 
 /**
  * The main content area can be in one of four modes:
@@ -45,6 +46,9 @@ interface Props {
   onCancel: () => void;
   onDeleted: (sessionId: string) => void;
   onTabUrlChange: (sessionId: string, tabId: string, url: string) => void;
+  onBriefEvent?: (event: BriefTerminalEvent) => void;
+  onBriefSettingsChanged?: (settings: BriefSettings) => void;
+  onTransfer?: (event: TerminalTransferEvent) => void;
 }
 
 export function SessionPanel({
@@ -57,6 +61,9 @@ export function SessionPanel({
   onCancel,
   onDeleted,
   onTabUrlChange,
+  onBriefEvent,
+  onBriefSettingsChanged,
+  onTransfer,
 }: Props) {
   // The terminal layer is in the back; the overlay (form / themes / empty
   // placeholder) sits on top when needed. We toggle visibility, never
@@ -72,6 +79,7 @@ export function SessionPanel({
         mode={{ kind: "create" }}
         onSaved={onSaved}
         onCancel={onCancel}
+        onBriefSettingsChanged={onBriefSettingsChanged}
       />
     );
   } else if (mode.kind === "edit") {
@@ -81,6 +89,7 @@ export function SessionPanel({
         onSaved={onSaved}
         onCancel={onCancel}
         onDeleted={onDeleted}
+        onBriefSettingsChanged={onBriefSettingsChanged}
       />
     );
   } else if (mode.kind === "themes") {
@@ -117,6 +126,8 @@ export function SessionPanel({
                 tabs={tabDataBySession[s.id] ?? []}
                 activeTabId={activeTabBySession[s.id] ?? null}
                 onTabUrlChange={onTabUrlChange}
+                onBriefEvent={onBriefEvent}
+                onTransfer={onTransfer}
               />
             </div>
           );
@@ -149,19 +160,25 @@ function TerminalSessionView({
   tabs,
   activeTabId,
   onTabUrlChange,
+  onBriefEvent,
+  onTransfer,
 }: {
   session: Session;
   tabs: Array<{ id: string; type: TabType; url?: string }>;
   activeTabId: string | null;
   onTabUrlChange: (sessionId: string, tabId: string, url: string) => void;
+  onBriefEvent?: (event: BriefTerminalEvent) => void;
+  onTransfer?: (event: TerminalTransferEvent) => void;
 }) {
   const [connectingLabel, setConnectingLabel] = useState<string | undefined>(
     undefined,
   );
+  const [optimisticEcho, setOptimisticEcho] = useState(false);
 
   useEffect(() => {
     if (session.kind !== "ssh") {
       setConnectingLabel(undefined);
+      setOptimisticEcho(false);
       return;
     }
     let cancelled = false;
@@ -173,6 +190,7 @@ function TerminalSessionView({
       } else {
         setConnectingLabel("remote host");
       }
+      setOptimisticEcho(t?.sshOptimisticEcho !== false);
     });
     return () => {
       cancelled = true;
@@ -185,7 +203,10 @@ function TerminalSessionView({
       tabs={tabs}
       activeTabId={activeTabId}
       connectingLabel={connectingLabel}
+      optimisticEcho={optimisticEcho}
       onTabUrlChange={onTabUrlChange}
+      onBriefEvent={onBriefEvent}
+      onTransfer={onTransfer}
     />
   );
 }

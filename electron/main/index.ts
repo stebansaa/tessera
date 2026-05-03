@@ -19,6 +19,7 @@ import { registerProjectHandlers } from "../ipc/projects";
 import { registerSessionHandlers } from "../ipc/sessions";
 import { registerSettingsHandlers } from "../ipc/settings";
 import { registerDialogHandlers } from "../ipc/dialog";
+import { registerBriefHandlers } from "../ipc/brief";
 import { spawnSsh, type Connection } from "../ssh/spawn";
 
 // ── Connection pool ────────────────────────────────────────────────
@@ -419,6 +420,7 @@ app.whenReady().then(() => {
   registerSessionHandlers(repo);
   registerSettingsHandlers(repo);
   registerDialogHandlers();
+  registerBriefHandlers(repo);
   registerPtyHandlers(repo);
 
   // Lightweight system info — returns total RSS in bytes.

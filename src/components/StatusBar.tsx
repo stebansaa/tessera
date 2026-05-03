@@ -4,6 +4,13 @@ import { api } from "../lib/api";
 
 interface StatusBarProps {
   sessions: number;
+  transfer?: TransferStatus | null;
+}
+
+export interface TransferStatus {
+  direction: "upload" | "download";
+  bytes: number;
+  active: boolean;
 }
 
 function formatBytes(bytes: number): string {
@@ -13,7 +20,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-export function StatusBar({ sessions }: StatusBarProps) {
+function formatTransferBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function StatusBar({ sessions, transfer }: StatusBarProps) {
   const [ram, setRam] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -37,6 +50,28 @@ export function StatusBar({ sessions }: StatusBarProps) {
       <span>
         <span className="text-dot-on">●</span> {sessions} connections
       </span>
+      {transfer && (
+        <span
+          className={[
+            "flex items-center gap-1.5 font-mono transition",
+            transfer.active ? "text-accent" : "text-fg-muted/60",
+          ].join(" ")}
+          title="Terminal transfer activity"
+        >
+          <span
+            className={[
+              "h-1.5 w-1.5 rounded-full",
+              transfer.active ? "animate-pulse bg-accent" : "bg-fg-muted/40",
+            ].join(" ")}
+          />
+          <span>user</span>
+          <span className={transfer.active ? "text-accent" : "text-fg-muted/60"}>
+            {transfer.direction === "upload" ? ">>>" : "<<<"}
+          </span>
+          <span>server</span>
+          <span>{formatTransferBytes(transfer.bytes)}</span>
+        </span>
+      )}
       {ram && <span className="text-fg-muted/70">RAM {ram}</span>}
       <span className="ml-auto flex items-center gap-3">
         <span className="text-fg-muted/70">tessera</span>

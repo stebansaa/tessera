@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
-import { StatusBar } from "./components/StatusBar";
+import { StatusBar, type TransferStatus } from "./components/StatusBar";
 import { SessionPanel, type PanelMode } from "./components/SessionPanel";
+import {
+  BriefPanel,
+  type BriefMode,
+  type BriefPanelState,
+} from "./components/BriefPanel";
 import { api } from "./lib/api";
-import type { Session, TabType } from "./shared/ipc";
+import type { TerminalTransferEvent } from "./components/TerminalView";
+import type { BriefSettings, BriefSummary, BriefTerminalEvent, Session, TabType } from "./shared/ipc";
 
 interface Tab {
   id: string;
@@ -59,6 +65,63 @@ function buildSidebar(sessions: Session[]): Session[] {
   return [...pinned, ...unpinned];
 }
 
+const BRIEF_AUTO_INTERVAL_MS = 30_000;
+const BRIEF_MIN_BATCH_EVENTS = 6;
+const BRIEF_MIN_BATCH_CHARS = 2_500;
+const BRIEF_MAX_EVENTS = 80;
+const BRIEF_MAX_CHARS = 50_000;
+const BRIEF_MAX_EVENT_CHARS = 8_000;
+const TRANSFER_FLUSH_MS = 150;
+const TRANSFER_IDLE_MS = 900;
+const TRANSFER_HIDE_MS = 1_800;
+const TRANSFER_MIN_VISIBLE_BYTES = 64;
+
+interface TransferAccumulator {
+  direction: TransferStatus["direction"] | null;
+  bytes: number;
+  active: boolean;
+  flushTimer: number | null;
+  idleTimer: number | null;
+  hideTimer: number | null;
+}
+
+function emptyBriefState(): BriefPanelState {
+  return {
+    mode: "paused",
+    summary: null,
+    pendingCount: 0,
+    error: null,
+    observedSince: null,
+  };
+}
+
+function withBriefDefaults(state: BriefPanelState | undefined): BriefPanelState {
+  return state ?? emptyBriefState();
+}
+
+function trimBriefBuffer(events: BriefTerminalEvent[]): BriefTerminalEvent[] {
+  let totalChars = 0;
+  const kept: BriefTerminalEvent[] = [];
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    totalChars += event.text.length;
+    if (kept.length >= BRIEF_MAX_EVENTS || totalChars > BRIEF_MAX_CHARS) break;
+    kept.unshift(event);
+  }
+  return kept;
+}
+
+function bufferChars(events: BriefTerminalEvent[]): number {
+  return events.reduce((sum, event) => sum + event.text.length, 0);
+}
+
+function resolveBriefReturnMode(
+  currentMode: BriefMode | undefined,
+  returnMode: BriefMode,
+): BriefMode {
+  return currentMode === "paused" ? "paused" : returnMode;
+}
+
 function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [view, setView] = useState<View>({ kind: "session", sessionId: null });
@@ -102,6 +165,149 @@ function App() {
   // Per-session live connection count, pushed from main.
   const [connStatus, setConnStatus] = useState<Record<string, number>>({});
   const tabsSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Live brief state is deliberately in-memory. Only the OpenRouter API key
+  // is persisted, encrypted by main through Electron safeStorage.
+  const [briefSettings, setBriefSettings] = useState<BriefSettings | null>(null);
+  const [briefs, setBriefs] = useState<Record<string, BriefPanelState>>({});
+  const [briefEnabledBySession, setBriefEnabledBySession] = useState<Record<string, boolean>>({});
+  const briefBuffersRef = useRef<Record<string, BriefTerminalEvent[]>>({});
+  const briefModesRef = useRef<Record<string, BriefMode>>({});
+  const briefSummariesRef = useRef<Record<string, BriefSummary | null>>({});
+  const briefSettingsRef = useRef<BriefSettings | null>(null);
+  const briefEnabledRef = useRef<Record<string, boolean>>({});
+  const briefInFlightRef = useRef<Record<string, boolean>>({});
+  const briefUiUpdateRef = useRef<Record<string, number>>({});
+  const sessionsRef = useRef<Session[]>([]);
+  const [transferStatus, setTransferStatus] = useState<TransferStatus | null>(null);
+  const transferAccumulatorRef = useRef<TransferAccumulator>({
+    direction: null,
+    bytes: 0,
+    active: false,
+    flushTimer: null,
+    idleTimer: null,
+    hideTimer: null,
+  });
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    const modes: Record<string, BriefMode> = {};
+    for (const [sessionId, state] of Object.entries(briefs)) {
+      modes[sessionId] = state.mode;
+    }
+    briefModesRef.current = modes;
+  }, [briefs]);
+
+  useEffect(() => {
+    briefSettingsRef.current = briefSettings;
+  }, [briefSettings]);
+
+  useEffect(() => {
+    briefEnabledRef.current = briefEnabledBySession;
+  }, [briefEnabledBySession]);
+
+  const patchBrief = useCallback((
+    sessionId: string,
+    patch: Partial<BriefPanelState>,
+  ) => {
+    setBriefs((prev) => ({
+      ...prev,
+      [sessionId]: {
+        ...withBriefDefaults(prev[sessionId]),
+        ...patch,
+      },
+    }));
+  }, []);
+
+  const handleBriefSettingsChanged = useCallback((settings: BriefSettings) => {
+    briefSettingsRef.current = settings;
+    setBriefSettings(settings);
+  }, []);
+
+  const handleTerminalTransfer = useCallback((event: TerminalTransferEvent) => {
+    if (event.bytes <= 0) return;
+
+    const bucket = transferAccumulatorRef.current;
+    if (!bucket.active && event.bytes < TRANSFER_MIN_VISIBLE_BYTES) return;
+
+    if (!bucket.active || bucket.direction !== event.direction) {
+      bucket.direction = event.direction;
+      bucket.bytes = 0;
+      bucket.active = true;
+    }
+
+    bucket.bytes += event.bytes;
+
+    if (bucket.hideTimer !== null) {
+      window.clearTimeout(bucket.hideTimer);
+      bucket.hideTimer = null;
+    }
+
+    if (bucket.flushTimer === null) {
+      bucket.flushTimer = window.setTimeout(() => {
+        bucket.flushTimer = null;
+        if (!bucket.direction) return;
+        setTransferStatus({
+          direction: bucket.direction,
+          bytes: bucket.bytes,
+          active: true,
+        });
+      }, TRANSFER_FLUSH_MS);
+    }
+
+    if (bucket.idleTimer !== null) {
+      window.clearTimeout(bucket.idleTimer);
+    }
+    bucket.idleTimer = window.setTimeout(() => {
+      bucket.idleTimer = null;
+      bucket.active = false;
+      setTransferStatus((current) =>
+        current ? { ...current, active: false } : current,
+      );
+      bucket.hideTimer = window.setTimeout(() => {
+        bucket.hideTimer = null;
+        if (bucket.active) return;
+        bucket.direction = null;
+        bucket.bytes = 0;
+        setTransferStatus(null);
+      }, TRANSFER_HIDE_MS);
+    }, TRANSFER_IDLE_MS);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const bucket = transferAccumulatorRef.current;
+      if (bucket.flushTimer !== null) window.clearTimeout(bucket.flushTimer);
+      if (bucket.idleTimer !== null) window.clearTimeout(bucket.idleTimer);
+      if (bucket.hideTimer !== null) window.clearTimeout(bucket.hideTimer);
+    };
+  }, []);
+
+  const refreshBriefConfigForSession = useCallback(
+    async (sessionId: string) => {
+      const details = await api.sessions.getDetails({ id: sessionId });
+      const enabled = details?.terminal?.liveBriefEnabled === true;
+      briefEnabledRef.current = {
+        ...briefEnabledRef.current,
+        [sessionId]: enabled,
+      };
+      setBriefEnabledBySession((prev) => ({
+        ...prev,
+        [sessionId]: enabled,
+      }));
+
+      const canRun = enabled && briefSettingsRef.current?.hasValidApiKey === true;
+      briefModesRef.current[sessionId] = canRun ? "watching" : "paused";
+      patchBrief(sessionId, {
+        mode: canRun ? "watching" : "paused",
+        error: null,
+      });
+    },
+    [patchBrief],
+  );
 
   // Helper that updates tabs state AND persists in one shot. Persisting
   // here (in the handlers) instead of in a useEffect avoids racing the
@@ -162,6 +368,20 @@ function App() {
         setOpenSessionIds([targetId]);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.brief.getSettings()
+      .then((settings) => {
+        if (!cancelled) setBriefSettings(settings);
+      })
+      .catch((err) => {
+        console.warn("[App] failed to load brief settings:", err);
+      });
     return () => {
       cancelled = true;
     };
@@ -294,6 +514,28 @@ function App() {
     [sessions, activeSessionId],
   );
 
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const session = sessions.find((s) => s.id === activeSessionId);
+    if (!session || (session.kind !== "local" && session.kind !== "ssh")) return;
+    refreshBriefConfigForSession(activeSessionId).catch((err) => {
+      console.warn("[App] failed to load brief config:", err);
+    });
+  }, [activeSessionId, sessions, refreshBriefConfigForSession]);
+
+  useEffect(() => {
+    const validKey = briefSettings?.hasValidApiKey === true;
+    for (const [sessionId, enabled] of Object.entries(briefEnabledBySession)) {
+      const canRun = validKey && enabled;
+      briefModesRef.current[sessionId] = canRun ? "watching" : "paused";
+      patchBrief(sessionId, {
+        mode: canRun ? "watching" : "paused",
+        pendingCount: briefBuffersRef.current[sessionId]?.length ?? 0,
+        error: null,
+      });
+    }
+  }, [briefSettings?.hasValidApiKey, briefEnabledBySession, patchBrief]);
+
   // Lazily seed a default tab the first time a session is viewed. We
   // wait until the persisted tabs state has loaded so we don't clobber
   // it with a fresh default.
@@ -373,6 +615,134 @@ function App() {
       .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
   }, [sessions, openSessionIds]);
 
+  const summarizeBriefSession = useCallback(
+    async (sessionId: string) => {
+      if (briefInFlightRef.current[sessionId]) return;
+      const events = briefBuffersRef.current[sessionId] ?? [];
+      if (events.length === 0) return;
+
+      briefInFlightRef.current[sessionId] = true;
+      briefBuffersRef.current[sessionId] = [];
+      const returnMode =
+        briefModesRef.current[sessionId] === "watching"
+          ? "watching"
+          : "paused";
+      briefModesRef.current[sessionId] = "summarizing";
+      patchBrief(sessionId, {
+        mode: "summarizing",
+        pendingCount: 0,
+        error: null,
+      });
+
+      const sessionName =
+        sessionsRef.current.find((s) => s.id === sessionId)?.name ?? "Session";
+
+      try {
+        const { summary } = await api.brief.summarize({
+          sessionId,
+          sessionName,
+          model: briefSettingsRef.current?.model,
+          previousSummary: briefSummariesRef.current[sessionId] ?? null,
+          events,
+        });
+        briefSummariesRef.current[sessionId] = summary;
+        const remaining = briefBuffersRef.current[sessionId] ?? [];
+        const nextMode = resolveBriefReturnMode(
+          briefModesRef.current[sessionId],
+          returnMode,
+        );
+        briefModesRef.current[sessionId] = nextMode;
+        patchBrief(sessionId, {
+          mode: nextMode,
+          summary,
+          pendingCount: remaining.length,
+          error: null,
+        });
+      } catch (err) {
+        briefBuffersRef.current[sessionId] = trimBriefBuffer([
+          ...events,
+          ...(briefBuffersRef.current[sessionId] ?? []),
+        ]);
+        const nextMode = resolveBriefReturnMode(
+          briefModesRef.current[sessionId],
+          returnMode,
+        );
+        briefModesRef.current[sessionId] = nextMode;
+        patchBrief(sessionId, {
+          mode: nextMode,
+          pendingCount: briefBuffersRef.current[sessionId]?.length ?? 0,
+          error: (err as Error).message,
+        });
+      } finally {
+        delete briefInFlightRef.current[sessionId];
+      }
+    },
+    [patchBrief],
+  );
+
+  const handleBriefEvent = useCallback(
+    (event: BriefTerminalEvent) => {
+      const canBrief =
+        briefSettingsRef.current?.hasValidApiKey === true &&
+        briefEnabledRef.current[event.sessionId] === true;
+      if (!canBrief) return;
+
+      const mode = briefModesRef.current[event.sessionId] ?? "paused";
+      if (mode !== "watching" && mode !== "summarizing") {
+        briefModesRef.current[event.sessionId] = "watching";
+        patchBrief(event.sessionId, { mode: "watching", error: null });
+      }
+
+      const nextEvent: BriefTerminalEvent = {
+        ...event,
+        text: event.text.slice(0, BRIEF_MAX_EVENT_CHARS),
+      };
+      const next = trimBriefBuffer([
+        ...(briefBuffersRef.current[event.sessionId] ?? []),
+        nextEvent,
+      ]);
+      briefBuffersRef.current[event.sessionId] = next;
+
+      const now = Date.now();
+      const lastUpdate = briefUiUpdateRef.current[event.sessionId] ?? 0;
+      if (now - lastUpdate > 750 || next.length % 10 === 0) {
+        briefUiUpdateRef.current[event.sessionId] = now;
+        patchBrief(event.sessionId, {
+          pendingCount: next.length,
+          observedSince:
+            briefs[event.sessionId]?.observedSince ?? event.ts,
+          error: null,
+        });
+      }
+    },
+    [briefs, patchBrief],
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const [sessionId, events] of Object.entries(briefBuffersRef.current)) {
+        if (briefSettingsRef.current?.hasValidApiKey !== true) continue;
+        if (briefEnabledRef.current[sessionId] !== true) continue;
+        if (briefModesRef.current[sessionId] !== "watching") continue;
+        if (briefInFlightRef.current[sessionId]) continue;
+        if (
+          events.length >= BRIEF_MIN_BATCH_EVENTS ||
+          bufferChars(events) >= BRIEF_MIN_BATCH_CHARS
+        ) {
+          summarizeBriefSession(sessionId);
+        }
+      }
+    }, BRIEF_AUTO_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [summarizeBriefSession]);
+
+  const handleClearBrief = (sessionId: string) => {
+    briefBuffersRef.current[sessionId] = [];
+    briefSummariesRef.current[sessionId] = null;
+    briefModesRef.current[sessionId] = "paused";
+    patchBrief(sessionId, emptyBriefState());
+  };
+
   const handleNewFromPlus = (type: "connection" | "webview") => {
     if (!activeSessionId) return;
     const list = tabsBySession[activeSessionId] ?? [];
@@ -433,6 +803,10 @@ function App() {
     markOpen(id);
   };
 
+  const handleOpenSessionSettings = (id: string) => {
+    setView({ kind: "edit", sessionId: id });
+  };
+
   const handleNewConnection = () => setView({ kind: "create" });
 
   const handleDeleteSession = async (sessionId: string) => {
@@ -479,6 +853,9 @@ function App() {
       setLastSessionId(saved.id);
       api.settings.setLastSession(saved.id);
       markOpen(saved.id);
+      refreshBriefConfigForSession(saved.id).catch((err) => {
+        console.warn("[App] failed to refresh brief config:", err);
+      });
     });
   };
 
@@ -504,6 +881,12 @@ function App() {
     settingsActive || (view.kind === "session" && !!view.sessionId)
       ? handleToggleSettings
       : null;
+  const showBriefPanel =
+    !!activeSessionId &&
+    !!activeSession &&
+    (activeSession.kind === "local" || activeSession.kind === "ssh") &&
+    briefSettings?.hasValidApiKey === true &&
+    briefEnabledBySession[activeSessionId] === true;
 
   return (
     <div className="flex h-screen w-screen flex-col bg-bg text-fg">
@@ -513,11 +896,12 @@ function App() {
           activeId={activeSessionId}
           connStatus={connStatus}
           onSelect={handleSelectSession}
+          onOpenSettings={handleOpenSessionSettings}
           onTogglePin={handleTogglePin}
           onMove={handleMoveSession}
           onNew={handleNewConnection}
         />
-        <main className="flex flex-1 flex-col overflow-hidden">
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <TabBar
             tabs={displayedTabs}
             // When the settings form is open the gear icon is the
@@ -542,12 +926,23 @@ function App() {
                 onCancel={handleCancel}
                 onDeleted={handleDeleteSession}
                 onTabUrlChange={handleTabUrlChange}
+                onBriefEvent={handleBriefEvent}
+                onBriefSettingsChanged={handleBriefSettingsChanged}
+                onTransfer={handleTerminalTransfer}
               />
             </div>
           </div>
         </main>
+        {showBriefPanel && (
+          <BriefPanel
+            session={activeSession}
+            state={activeSessionId ? briefs[activeSessionId] : undefined}
+            onClear={handleClearBrief}
+            onSummarizeNow={summarizeBriefSession}
+          />
+        )}
       </div>
-      <StatusBar sessions={sessions.length} />
+      <StatusBar sessions={sessions.length} transfer={transferStatus} />
     </div>
   );
 }

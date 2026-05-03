@@ -134,6 +134,24 @@ These are conscious trade-offs in exchange for the entire HTML/CSS ecosystem bei
 
 ---
 
+## Terminal Input & Paste Handling
+
+Terminal paste behavior is correctness-critical. Tessera can run terminal-aware apps inside terminal-aware apps, for example `codex` running inside Tessera over a local or SSH PTY. In that setup, a large pasted browser log must arrive as one paste operation, not as many typed/submitted lines.
+
+Implementation rules:
+
+- Custom paste paths must call xterm.js `term.paste(text)`. This includes context-menu paste and `Ctrl+Shift+V`.
+- Do not send clipboard text directly to `window.api.pty.write`. That bypasses xterm's paste handling and can break TUIs, shells, editors, and Codex.
+- `term.paste(text)` normalizes line endings and applies bracketed paste mode (`\x1b[200~` / `\x1b[201~`) when the running program enables it.
+- The PTY write queue may throttle large paste bodies, but it must preserve bracketed paste start/end markers and await each IPC write before sending the next chunk.
+- Native paste, context-menu paste, and keyboard paste should share the same path so behavior is consistent.
+
+Regression check:
+
+- Run `codex` inside a Tessera terminal, paste a long multiline browser console log, and confirm Codex recognizes it as a single large pasted chunk instead of many interactive submissions.
+
+---
+
 ## Architecture
 
 Electron splits the app into two process types:
