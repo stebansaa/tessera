@@ -15,7 +15,8 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "typecheck": "tsc -b --pretty false",
+    "build": "npm run typecheck && electron-vite build",
     "prepare:release:native": "node scripts/remove-optional-native.js",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3,node-pty",
     "rebuild:native:release": "npm run prepare:release:native && npm run rebuild:native",

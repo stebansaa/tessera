@@ -32,6 +32,7 @@ const connections = new Map<string, Connection>();
 const sessionPtys = new Map<string, Set<string>>();
 /** Reverse lookup: ptyId → sessionId. Needed by the kill handler. */
 const ptyToSession = new Map<string, string>();
+let mainWindow: BrowserWindow | null = null;
 
 function expandHomePath(p?: string): string | undefined {
   if (!p) return p;
@@ -83,7 +84,9 @@ function wrapLocalPty(opts: {
 }
 
 /** Push a connection-status update to the renderer for one session. */
-function broadcastConnStatus(win: BrowserWindow, sessionId: string) {
+function broadcastConnStatus(sessionId: string) {
+  const win = mainWindow;
+  if (!win) return;
   if (win.isDestroyed()) return;
   const liveCount = sessionPtys.get(sessionId)?.size ?? 0;
   const evt: ConnectionStatusEvent = { sessionId, liveCount };
@@ -112,7 +115,7 @@ function untrackPty(ptyId: string): string | undefined {
   return sessionId;
 }
 
-function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
+function registerPtyHandlers(repo: Repo) {
   ipcMain.handle(
     IPC.pty.spawn,
     async (_evt, req: PtySpawnRequest): Promise<PtySpawnResponse> => {
@@ -164,7 +167,7 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
       // Track this ptyId against its session for status broadcasting.
       if (req.sessionId) {
         trackPty(req.sessionId, ptyId);
-        broadcastConnStatus(win, req.sessionId);
+        broadcastConnStatus(req.sessionId);
       }
 
       // Bump last_used_at so the RECENT section in the sidebar moves
@@ -177,13 +180,15 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
         }
       }
       conn.onData((data) => {
-        if (!win.isDestroyed()) {
+        const win = mainWindow;
+        if (win && !win.isDestroyed()) {
           win.webContents.send(`${IPC.pty.dataPrefix}${ptyId}`, data);
         }
       });
 
       conn.onExit(({ exitCode, signal }) => {
-        if (!win.isDestroyed()) {
+        const win = mainWindow;
+        if (win && !win.isDestroyed()) {
           win.webContents.send(`${IPC.pty.exitPrefix}${ptyId}`, {
             exitCode,
             signal,
@@ -191,7 +196,7 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
         }
         connections.delete(ptyId);
         const sid = untrackPty(ptyId);
-        if (sid) broadcastConnStatus(win, sid);
+        if (sid) broadcastConnStatus(sid);
       });
 
       return { ptyId };
@@ -210,7 +215,7 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
     connections.get(req.ptyId)?.kill();
     connections.delete(req.ptyId);
     const sid = untrackPty(req.ptyId);
-    if (sid) broadcastConnStatus(win, sid);
+    if (sid) broadcastConnStatus(sid);
   });
 
   // Snapshot of all live session connections — renderer calls on mount.
@@ -225,7 +230,7 @@ function registerPtyHandlers(win: BrowserWindow, repo: Repo) {
 
 // ── Window ─────────────────────────────────────────────────────────
 
-function createWindow(repo: Repo) {
+function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -241,6 +246,11 @@ function createWindow(repo: Repo) {
       sandbox: false, // node-pty needs this off for the preload to load native modules
       webviewTag: true, // needed for embedded web page tabs
     },
+  });
+  mainWindow = win;
+
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
   });
 
   win.once("ready-to-show", () => win.show());
@@ -350,7 +360,6 @@ function createWindow(repo: Repo) {
     }
   });
 
-  registerPtyHandlers(win, repo);
   return win;
 }
 
@@ -366,6 +375,7 @@ app.whenReady().then(() => {
   registerSessionHandlers(repo);
   registerSettingsHandlers(repo);
   registerDialogHandlers();
+  registerPtyHandlers(repo);
 
   // Lightweight system info — returns total RSS in bytes.
   ipcMain.handle(IPC.system.memoryUsage, async () => {
@@ -385,10 +395,10 @@ app.whenReady().then(() => {
     return win?.isFullScreen() ?? false;
   });
 
-  createWindow(repo);
+  createWindow();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(repo);
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
@@ -402,6 +412,8 @@ app.on("window-all-closed", () => {
     }
   }
   connections.clear();
+  sessionPtys.clear();
+  ptyToSession.clear();
 
   if (process.platform !== "darwin") app.quit();
 });

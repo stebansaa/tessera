@@ -17,6 +17,15 @@ const FONT_FALLBACK =
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 
+function fmtTime(ts: number): string {
+  const d = new Date(ts);
+  const mon = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${mon} ${day} ${h}:${m}`;
+}
+
 interface Props {
   /** Session id this terminal is bound to. When set, main routes the
    *  spawn through SQLite to pick local-pty vs ssh based on session.kind. */

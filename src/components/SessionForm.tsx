@@ -175,6 +175,8 @@ export function SessionForm({
           name: name.trim(),
           kind,
           position: 0,
+          lastUsedAt: Date.now(),
+          pinnedAt: null,
         });
       }
     } finally {

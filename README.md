@@ -1,8 +1,8 @@
 # Tessera
 
-A unified developer workspace that combines persistent terminal sessions (local + SSH), embedded web pages, and project organization into a single desktop application. Built with Electron, React, and xterm.js.
+A unified developer workspace that combines local and SSH terminal sessions, embedded web pages, and project organization into a single desktop application. Built with Electron, React, and xterm.js.
 
-Tessera replaces the juggling of multiple terminal windows, SSH clients, and browser tabs with one cohesive workspace where every session is persistent, searchable, and reconnectable.
+Tessera replaces the juggling of multiple terminal windows, SSH clients, and browser tabs with one cohesive workspace where connection settings, tabs, and appearance preferences persist across restarts.
 
 ## Features
 
@@ -11,14 +11,7 @@ Tessera replaces the juggling of multiple terminal windows, SSH clients, and bro
 - **SSH connections** with key, password, or agent authentication
 - GPU-accelerated terminal rendering via xterm.js WebGL addon
 - 50,000-line scrollback buffer
-- Automatic session reconnection on disconnect
-
-### Transcript History
-- All terminal output is stored locally in SQLite as append-only chunks
-- Replay previous session output on reconnect (byte-capped at 256KB for performance)
-- Paginated lazy loading on scroll-up for older history
-- Full-text search (FTS5) across all transcripts
-- Per-session storage stats and clear controls in settings
+- Reconnect controls after disconnect
 
 ### Tabbed Workspace
 - Multiple tabs per connection (terminal + web pages)
@@ -50,7 +43,6 @@ Tessera replaces the juggling of multiple terminal windows, SSH clients, and bro
 - `Ctrl+W` / `Cmd+W` &mdash; Close current tab
 - `Ctrl+Shift+C` &mdash; Copy selection
 - `Ctrl+Shift+V` &mdash; Paste from clipboard
-- `Ctrl+Tab` / `Ctrl+Shift+Tab` &mdash; Cycle tabs
 - `Ctrl+1`&ndash;`9` &mdash; Switch to tab N
 - Right-click &mdash; Context menu (Copy, Paste, Select All)
 - `Enter` on disconnected session &mdash; Reconnect
@@ -62,7 +54,6 @@ Main Process (Node.js)
   ├── SQLite (better-sqlite3, WAL mode)
   ├── PTY pool (node-pty)
   ├── SSH pool (ssh2)
-  ├── Transcript writer (batched PTY output -> SQLite)
   ├── Electron safeStorage (password encryption)
   └── IPC handlers
 
@@ -71,7 +62,7 @@ Renderer Process (Chromium + React)
   ├── Tab bar (terminal + webview tabs)
   ├── Terminal views (xterm.js + WebGL)
   ├── Webview tabs (Electron <webview>)
-  ├── Settings panel (appearance, storage)
+  ├── Settings panel (appearance)
   └── Connection forms (create/edit/delete)
 ```
 
@@ -88,7 +79,7 @@ All communication between main and renderer goes through typed IPC channels defi
 | Terminal | xterm.js 5 with WebGL addon |
 | PTY | node-pty |
 | SSH | ssh2 |
-| Database | better-sqlite3 (WAL mode, FTS5) |
+| Database | better-sqlite3 (WAL mode) |
 | Secrets | Electron safeStorage (OS keychain) |
 | State | Zustand |
 | Icons | lucide-react |
@@ -132,7 +123,8 @@ This starts electron-vite in dev mode with HMR for both the main and renderer pr
 ## Building
 
 ```bash
-npm run build      # Build main + preload + renderer
+npm run typecheck  # Type-check main + preload + renderer
+npm run build      # Type-check and build main + preload + renderer
 npm run start      # Preview the production build
 ```
 
@@ -171,17 +163,14 @@ tessera/
 │   │   ├── repo.ts             # All database operations
 │   │   ├── migrate.ts          # Migration runner
 │   │   ├── migrations/
-│   │   │   └── 0001_init.sql   # Schema: sessions, transcripts, FTS5, settings
+│   │   │   └── 0001_init.sql   # Base schema: projects, sessions, settings
 │   │   └── seed.ts             # Default data seeding
 │   ├── ipc/                    # IPC handler registration
 │   │   ├── sessions.ts
 │   │   ├── projects.ts
-│   │   ├── transcripts.ts
 │   │   ├── settings.ts
-│   │   ├── search.ts
 │   │   └── dialog.ts
 │   ├── ssh/spawn.ts            # SSH connection via ssh2
-│   └── pty/transcript-writer.ts # Batched PTY output -> SQLite
 ├── src/
 │   ├── App.tsx                 # Main app component, state management
 │   ├── shared/ipc.ts           # Typed IPC contract (shared by main + renderer)
@@ -191,12 +180,12 @@ tessera/
 │   └── components/
 │       ├── Sidebar.tsx         # Connection list with reorder + pin
 │       ├── TabBar.tsx          # Tab bar with terminal/webview tab creation
-│       ├── TerminalView.tsx    # xterm.js terminal with WebGL, transcript replay
+│       ├── TerminalView.tsx    # xterm.js terminal with WebGL
 │       ├── TerminalTabs.tsx    # Multi-tab container (terminal + webview)
 │       ├── WebviewTab.tsx      # Embedded web page with URL bar
 │       ├── SessionForm.tsx     # Create/edit connection form with safe delete
 │       ├── SessionPanel.tsx    # Session detail panel orchestrator
-│       ├── ThemePanel.tsx      # Appearance settings + storage management
+│       ├── ThemePanel.tsx      # Appearance settings
 │       └── StatusBar.tsx       # Bottom status bar
 ├── electron.vite.config.ts
 ├── tailwind.config.js
@@ -210,7 +199,6 @@ All data is stored locally on your machine. No cloud, no telemetry.
 
 - **Database:** `~/.config/tessera/tessera.db` (Linux), `~/Library/Application Support/tessera/tessera.db` (macOS), `%APPDATA%/tessera/tessera.db` (Windows)
 - **Passwords:** Encrypted with Electron safeStorage (OS keychain) and stored as encrypted blobs in SQLite. Cleartext is never written to disk.
-- **Transcripts:** Append-only chunks in SQLite with FTS5 indexing for full-text search.
 - **Settings:** Theme, tab state, and last active session stored in `app_settings` table.
 
 ## Database Schema
@@ -220,9 +208,8 @@ The schema uses SQLite with WAL mode and foreign keys enabled:
 - `projects` &mdash; Workspace grouping (default project auto-created)
 - `sessions` &mdash; Connections (terminal/ssh)
 - `terminal_sessions` &mdash; SSH/local config per session (host, port, auth, encrypted password)
-- `session_runs` &mdash; Each PTY spawn lifecycle (running/ended/crashed)
-- `transcript_chunks` &mdash; Append-only terminal output with sequence numbers
-- `transcript_fts` &mdash; FTS5 virtual table for full-text search across transcripts
+- `llm_sessions` and `llm_messages` &mdash; Reserved for LLM workspace features
+- `webview_sessions` &mdash; Embedded web page state
 - `app_settings` &mdash; Key-value store for theme, tabs, preferences
 
 ## License

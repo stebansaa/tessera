@@ -86,7 +86,7 @@ function rowToSession(row: SessionRow): Session {
 }
 
 export interface CreateSessionInput {
-  projectId: string;
+  projectId?: string;
   name: string;
   kind: SessionKind;
   // Terminal-specific (used when kind is local|ssh)
