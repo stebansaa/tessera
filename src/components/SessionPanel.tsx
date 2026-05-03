@@ -44,7 +44,7 @@ interface Props {
   onSaved: (session: Session) => void;
   onCancel: () => void;
   onDeleted: (sessionId: string) => void;
-  onTabUrlChange: (tabId: string, url: string) => void;
+  onTabUrlChange: (sessionId: string, tabId: string, url: string) => void;
 }
 
 export function SessionPanel({
@@ -153,7 +153,7 @@ function TerminalSessionView({
   session: Session;
   tabs: Array<{ id: string; type: TabType; url?: string }>;
   activeTabId: string | null;
-  onTabUrlChange: (tabId: string, url: string) => void;
+  onTabUrlChange: (sessionId: string, tabId: string, url: string) => void;
 }) {
   const [connectingLabel, setConnectingLabel] = useState<string | undefined>(
     undefined,

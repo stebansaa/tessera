@@ -64,6 +64,28 @@ function wrapLocalPty(opts: {
     env: { ...process.env, ...(opts.env ?? {}) } as Record<string, string>,
   });
 
+  const dataHandlers: Array<(data: string) => void> = [];
+  const bufferedData: string[] = [];
+  const exitHandlers: Array<(info: { exitCode: number; signal?: number }) => void> = [];
+  let bufferedExit: { exitCode: number; signal?: number } | null = null;
+
+  pty.onData((data) => {
+    if (dataHandlers.length === 0) {
+      bufferedData.push(data);
+      return;
+    }
+    for (const h of dataHandlers) h(data);
+  });
+
+  pty.onExit(({ exitCode, signal }) => {
+    const info = { exitCode, signal };
+    if (exitHandlers.length === 0) {
+      bufferedExit = info;
+      return;
+    }
+    for (const h of exitHandlers) h(info);
+  });
+
   return {
     write: (d) => pty.write(d),
     resize: (c, r) => pty.resize(c, r),
@@ -75,10 +97,12 @@ function wrapLocalPty(opts: {
       }
     },
     onData: (h) => {
-      pty.onData(h);
+      dataHandlers.push(h);
+      while (bufferedData.length > 0) h(bufferedData.shift()!);
     },
     onExit: (h) => {
-      pty.onExit(({ exitCode, signal }) => h({ exitCode, signal }));
+      exitHandlers.push(h);
+      if (bufferedExit) h(bufferedExit);
     },
   };
 }
@@ -131,15 +155,28 @@ function registerPtyHandlers(repo: Repo) {
       if (
         details &&
         details.kind === "ssh" &&
-        details.terminal &&
-        details.terminal.host &&
-        details.terminal.username
+        details.terminal
       ) {
         const t = details.terminal;
+        if (!t.host || !t.username) {
+          throw new Error("SSH session is missing host or username.");
+        }
+        if (t.authMethod !== "key" && t.authMethod !== "password") {
+          throw new Error("SSH session is missing an authentication method.");
+        }
+        if (t.authMethod === "key" && !t.identityFile) {
+          throw new Error("SSH key authentication requires a private key file.");
+        }
+        if (t.authMethod === "password" && !t.hasPassword) {
+          throw new Error("SSH password authentication requires a saved password.");
+        }
         const password =
           t.authMethod === "password"
             ? repo.getSshPassword(details.id)
             : null;
+        if (t.authMethod === "password" && !password) {
+          throw new Error("Could not decrypt the saved SSH password.");
+        }
         conn = await spawnSsh({
           host: t.host!,
           port: t.port ?? 22,
@@ -257,7 +294,14 @@ function createWindow() {
 
   // Open external links in the system browser instead of navigating
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    try {
+      const parsed = new URL(url);
+      if (["http:", "https:", "mailto:"].includes(parsed.protocol)) {
+        shell.openExternal(url);
+      }
+    } catch {
+      /* deny invalid URLs */
+    }
     return { action: "deny" };
   });
 

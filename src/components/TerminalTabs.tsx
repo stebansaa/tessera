@@ -30,7 +30,7 @@ interface Props {
   /** Optional "user@host" label, set only for SSH sessions, used by
    *  TerminalView to render the connecting overlay before first byte. */
   connectingLabel?: string;
-  onTabUrlChange: (tabId: string, url: string) => void;
+  onTabUrlChange: (sessionId: string, tabId: string, url: string) => void;
 }
 
 export function TerminalTabs({
@@ -57,7 +57,7 @@ export function TerminalTabs({
               <WebviewTab
                 tabId={tab.id}
                 initialUrl={tab.url}
-                onUrlChange={(url) => onTabUrlChange(tab.id, url)}
+                onUrlChange={(url) => onTabUrlChange(sessionId, tab.id, url)}
               />
             ) : (
               <TerminalView

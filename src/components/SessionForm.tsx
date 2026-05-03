@@ -104,7 +104,6 @@ export function SessionForm({
 
   const isTerminal = kind === "local" || kind === "ssh";
   const isSsh = kind === "ssh";
-  const canSubmit = name.trim().length > 0 && !submitting;
 
   // Default new SSH sessions to password auth so the form has *something*
   // selected — switching to a different option is one click.
@@ -124,6 +123,22 @@ export function SessionForm({
     return terminal.hasPassword ? undefined : null;
   };
 
+  const hasValidPort =
+    terminal.port == null ||
+    (Number.isInteger(terminal.port) &&
+      terminal.port >= 1 &&
+      terminal.port <= 65535);
+  const hasRequiredSshFields =
+    !isSsh ||
+    (Boolean(terminal.host?.trim()) &&
+      Boolean(terminal.username?.trim()) &&
+      hasValidPort &&
+      (authMethod !== "key" || Boolean(terminal.identityFile?.trim())) &&
+      (authMethod !== "password" ||
+        password.length > 0 ||
+        (mode.kind === "edit" && terminal.hasPassword)));
+  const canSubmit = name.trim().length > 0 && hasRequiredSshFields && !submitting;
+
   const submit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
@@ -132,15 +147,15 @@ export function SessionForm({
         const session = await api.sessions.create({
           name: name.trim(),
           kind,
-          shellPath: terminal.shellPath || null,
-          startDir: terminal.startDir || null,
-          host: isSsh ? terminal.host || null : null,
-          username: isSsh ? terminal.username || null : null,
+          shellPath: terminal.shellPath?.trim() || null,
+          startDir: terminal.startDir?.trim() || null,
+          host: isSsh ? terminal.host?.trim() || null : null,
+          username: isSsh ? terminal.username?.trim() || null : null,
           port: isSsh ? terminal.port || null : null,
           authMethod: isSsh ? authMethod : null,
           identityFile:
             isSsh && authMethod === "key"
-              ? terminal.identityFile || null
+              ? terminal.identityFile?.trim() || null
               : null,
           password:
             isSsh && authMethod === "password" && password.length > 0
@@ -154,15 +169,15 @@ export function SessionForm({
           name: name.trim(),
           terminal: isTerminal
             ? {
-                shellPath: terminal.shellPath || null,
-                startDir: terminal.startDir || null,
-                host: isSsh ? terminal.host || null : null,
-                username: isSsh ? terminal.username || null : null,
+                shellPath: terminal.shellPath?.trim() || null,
+                startDir: terminal.startDir?.trim() || null,
+                host: isSsh ? terminal.host?.trim() || null : null,
+                username: isSsh ? terminal.username?.trim() || null : null,
                 port: isSsh ? terminal.port || null : null,
                 authMethod: isSsh ? authMethod : null,
                 identityFile:
                   isSsh && authMethod === "key"
-                    ? terminal.identityFile || null
+                    ? terminal.identityFile?.trim() || null
                     : null,
                 password: passwordForUpdate(),
               }
@@ -394,8 +409,8 @@ export function SessionForm({
         <div className="mt-12 rounded-lg border border-red-500/30 bg-red-500/[0.04] p-4">
           <SectionDivider label="Danger zone" />
           <p className="mt-3 text-sm text-fg-muted">
-            Permanently delete this connection, including all terminal history
-            and saved settings. This action cannot be undone.
+            Permanently delete this connection and its saved settings. This
+            action cannot be undone.
           </p>
           {!showDeleteConfirm ? (
             <button

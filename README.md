@@ -8,7 +8,7 @@ Tessera replaces the juggling of multiple terminal windows, SSH clients, and bro
 
 ### Terminal Sessions
 - **Local shell** with configurable shell path and starting directory
-- **SSH connections** with key, password, or agent authentication
+- **SSH connections** with key or password authentication
 - GPU-accelerated terminal rendering via xterm.js WebGL addon
 - 50,000-line scrollback buffer
 - Reconnect controls after disconnect

@@ -89,10 +89,12 @@ export function spawnSsh(opts: SshSpawnOptions): Promise<Connection> {
 
     let stream: ClientChannel | null = null;
     const dataHandlers: ((data: string) => void)[] = [];
+    const bufferedData: string[] = [];
     const exitHandlers: ((info: {
       exitCode: number;
       signal?: number;
     }) => void)[] = [];
+    let bufferedExit: { exitCode: number; signal?: number } | null = null;
     let exited = false;
 
     client.on("ready", () => {
@@ -114,27 +116,43 @@ export function spawnSsh(opts: SshSpawnOptions): Promise<Connection> {
           // utf8 strings so we can hand them straight to xterm.write.
           ch.on("data", (chunk: Buffer | string) => {
             const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+            if (dataHandlers.length === 0) {
+              bufferedData.push(s);
+              return;
+            }
             for (const h of dataHandlers) h(s);
           });
           // stderr from the remote (rare for an interactive shell, but
           // possible) is funneled into the same stream so the user sees it.
           ch.stderr.on("data", (chunk: Buffer | string) => {
             const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+            if (dataHandlers.length === 0) {
+              bufferedData.push(s);
+              return;
+            }
             for (const h of dataHandlers) h(s);
           });
 
           ch.on("close", () => {
             if (exited) return;
             exited = true;
-            for (const h of exitHandlers) h({ exitCode: 0 });
+            const info = { exitCode: 0 };
+            if (exitHandlers.length === 0) {
+              bufferedExit = info;
+            } else {
+              for (const h of exitHandlers) h(info);
+            }
             client.end();
           });
 
           ch.on("exit", (code: number, signal?: string) => {
             if (exited) return;
             exited = true;
-            for (const h of exitHandlers) {
-              h({ exitCode: code ?? 0, signal: signal ? 0 : undefined });
+            const info = { exitCode: code ?? 0, signal: signal ? 0 : undefined };
+            if (exitHandlers.length === 0) {
+              bufferedExit = info;
+            } else {
+              for (const h of exitHandlers) h(info);
             }
           });
 
@@ -169,9 +187,11 @@ export function spawnSsh(opts: SshSpawnOptions): Promise<Connection> {
             },
             onData(handler) {
               dataHandlers.push(handler);
+              while (bufferedData.length > 0) handler(bufferedData.shift()!);
             },
             onExit(handler) {
               exitHandlers.push(handler);
+              if (bufferedExit) handler(bufferedExit);
             },
           });
         },
@@ -187,14 +207,24 @@ export function spawnSsh(opts: SshSpawnOptions): Promise<Connection> {
       if (!stream) {
         rejectP(err);
       } else {
-        for (const h of exitHandlers) h({ exitCode: 255 });
+        const info = { exitCode: 255 };
+        if (exitHandlers.length === 0) {
+          bufferedExit = info;
+        } else {
+          for (const h of exitHandlers) h(info);
+        }
       }
     });
 
     client.on("close", () => {
       if (exited) return;
       exited = true;
-      for (const h of exitHandlers) h({ exitCode: 0 });
+      const info = { exitCode: 0 };
+      if (exitHandlers.length === 0) {
+        bufferedExit = info;
+      } else {
+        for (const h of exitHandlers) h(info);
+      }
     });
 
     client.connect({

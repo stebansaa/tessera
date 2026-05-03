@@ -331,7 +331,11 @@ export function createRepo(db: Database.Database) {
 
     updateSession(input: UpdateSessionInput): void {
       const tx = db.transaction(() => {
-        const pid = input.projectId ?? this.defaultProjectId();
+        const current = stmts.selectSessionPosition.get(input.id) as
+          | { position: number; project_id: string }
+          | undefined;
+        if (!current) return;
+        const pid = input.projectId ?? current.project_id;
         stmts.updateSessionRow.run(input.name, pid, input.id);
         // We only let the form edit terminal extras for now. LLM/webview
         // editing comes alongside Phases 4/5.

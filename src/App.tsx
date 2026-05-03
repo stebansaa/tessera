@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
@@ -82,6 +82,8 @@ function App() {
   const [activeTabBySession, setActiveTabBySession] = useState<
     Record<string, string>
   >({});
+  const tabsBySessionRef = useRef<Record<string, Tab[]>>({});
+  const activeTabBySessionRef = useRef<Record<string, string>>({});
   // Gates the auto-seed effect — we don't want to create a default tab
   // and overwrite the saved state before it has loaded from SQLite.
   const [tabsLoaded, setTabsLoaded] = useState(false);
@@ -99,6 +101,7 @@ function App() {
 
   // Per-session live connection count, pushed from main.
   const [connStatus, setConnStatus] = useState<Record<string, number>>({});
+  const tabsSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   // Helper that updates tabs state AND persists in one shot. Persisting
   // here (in the handlers) instead of in a useEffect avoids racing the
@@ -108,12 +111,20 @@ function App() {
     nextTabs: Record<string, Tab[]>,
     nextActive: Record<string, string>,
   ) => {
+    tabsBySessionRef.current = nextTabs;
+    activeTabBySessionRef.current = nextActive;
     setTabsBySession(nextTabs);
     setActiveTabBySession(nextActive);
-    api.settings.setTabs({
+    const snapshot = {
       tabsBySession: nextTabs,
       activeTabBySession: nextActive,
-    });
+    };
+    tabsSaveQueueRef.current = tabsSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => api.settings.setTabs(snapshot))
+      .catch((err) => {
+        console.warn("[App] failed to persist tabs:", err);
+      });
   };
 
   // Initial load from SQLite via IPC
@@ -138,6 +149,8 @@ function App() {
       }
       setTabsBySession(normalized);
       setActiveTabBySession(t.activeTabBySession);
+      tabsBySessionRef.current = normalized;
+      activeTabBySessionRef.current = t.activeTabBySession;
       setConnStatus(cs);
       setTabsLoaded(true);
       if (s.length > 0) {
@@ -380,13 +393,14 @@ function App() {
 
   const handleCloseTab = (id: string) => {
     if (!activeSessionId) return;
+    const list = tabsBySession[activeSessionId] ?? [];
     // Warn if this session has a live connection — closing the tab kills
     // the PTY, which may surprise the user mid-work.
+    const closingTab = list.find((t) => t.id === id);
     const liveCount = connStatus[activeSessionId] ?? 0;
-    if (liveCount > 0) {
+    if (closingTab?.type === "terminal" && liveCount > 0) {
       if (!window.confirm("This will end the connection. Close tab?")) return;
     }
-    const list = tabsBySession[activeSessionId] ?? [];
     const next = list.filter((t) => t.id !== id);
     // Tab 1 is unclosable (TabBar hides the X), so next always has ≥1.
     const nextActive =
@@ -443,15 +457,16 @@ function App() {
     }
   };
 
-  const handleTabUrlChange = (tabId: string, url: string) => {
-    if (!activeSessionId) return;
-    const list = tabsBySession[activeSessionId] ?? [];
+  const handleTabUrlChange = (sessionId: string, tabId: string, url: string) => {
+    const currentTabsBySession = tabsBySessionRef.current;
+    const currentActiveTabBySession = activeTabBySessionRef.current;
+    const list = currentTabsBySession[sessionId] ?? [];
     const nextList = list.map((t) =>
       t.id === tabId ? { ...t, url } : t,
     );
     persistTabs(
-      { ...tabsBySession, [activeSessionId]: nextList },
-      activeTabBySession,
+      { ...currentTabsBySession, [sessionId]: nextList },
+      currentActiveTabBySession,
     );
   };
 
